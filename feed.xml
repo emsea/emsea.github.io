@@ -5,8 +5,8 @@
     <description>random blog</description>
     <link>/</link>
     <atom:link href="/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Mon, 04 Dec 2017 20:13:33 -0800</pubDate>
-    <lastBuildDate>Mon, 04 Dec 2017 20:13:33 -0800</lastBuildDate>
+    <pubDate>Mon, 04 Dec 2017 20:19:48 -0800</pubDate>
+    <lastBuildDate>Mon, 04 Dec 2017 20:19:48 -0800</lastBuildDate>
     <generator>Jekyll v3.6.2</generator>
     
       <item>
@@ -863,7 +863,7 @@ import+0x1000:
 
     &lt;span class=&quot;nf&quot;&gt;xor&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;ecx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;ecx&lt;/span&gt;
   &lt;span class=&quot;nl&quot;&gt;find_exports:&lt;/span&gt;
-    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;esi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;r14&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rcx&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;4&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;    &lt;span class=&quot;c1&quot;&gt;; use RCX to index AddressOfNames getting cur func name RVA&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;esi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;r14&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rcx&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;4&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;c1&quot;&gt;; use rcx to index AddressOfNames getting cur func name RVA&lt;/span&gt;
     &lt;span class=&quot;nf&quot;&gt;add&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rsi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt;
 
   &lt;span class=&quot;c1&quot;&gt;; hash export name to compare to imp tbl entry&lt;/span&gt;
@@ -900,7 +900,7 @@ import+0x1000:
     &lt;span class=&quot;nf&quot;&gt;cmp&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rcx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;r12&lt;/span&gt;
     &lt;span class=&quot;nf&quot;&gt;jl&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;find_exports&lt;/span&gt;
 
-    &lt;span class=&quot;c1&quot;&gt;; rcx big enough because size of # exports&lt;/span&gt;
+  &lt;span class=&quot;c1&quot;&gt;; rcx big enough because size of # exports&lt;/span&gt;
   &lt;span class=&quot;nl&quot;&gt;next_dll:&lt;/span&gt;
     &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rdi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbp&lt;/span&gt;
     &lt;span class=&quot;nf&quot;&gt;xor&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;
@@ -928,9 +928,9 @@ import+0x1000:
     &lt;span class=&quot;nf&quot;&gt;xor&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;ecx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;ecx&lt;/span&gt;
     &lt;span class=&quot;nf&quot;&gt;call&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;ExitProcess&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;
 
-  &lt;span class=&quot;c1&quot;&gt;; ---------------------------------------------------&lt;/span&gt;
+
   &lt;span class=&quot;nf&quot;&gt;_msg&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;db&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&amp;#39;hello tiny world!&amp;#39;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
-  &lt;span class=&quot;c1&quot;&gt;; ---------------------------------------------------&lt;/span&gt;
+
 
   &lt;span class=&quot;nf&quot;&gt;macro&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;import_start&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;{}&lt;/span&gt;
   &lt;span class=&quot;nf&quot;&gt;macro&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;import_end&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;dd&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;}&lt;/span&gt;
@@ -975,6 +975,7 @@ import+0x1000:
 
   &lt;span class=&quot;c1&quot;&gt;; 115 bytes table, 172 bytes import asm&lt;/span&gt;
   &lt;span class=&quot;c1&quot;&gt;; equivalent default imp table is 358 bytes saving 71 bytes already&lt;/span&gt;
+  &lt;span class=&quot;c1&quot;&gt;; with this small table&lt;/span&gt;
   &lt;span class=&quot;k&quot;&gt;import&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;_start&lt;/span&gt;
     &lt;span class=&quot;nf&quot;&gt;use&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&amp;#39;kernel32&amp;#39;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;&lt;span class=&quot;err&quot;&gt;\&lt;/span&gt;
       &lt;span class=&quot;nf&quot;&gt;AcquireSRWLockExclusive&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;&lt;span class=&quot;err&quot;&gt;\&lt;/span&gt;

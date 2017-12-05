@@ -891,7 +891,7 @@ import+0x1000:
 
     <span class="nf">xor</span> <span class="nb">ecx</span><span class="p">,</span> <span class="nb">ecx</span>
   <span class="nl">find_exports:</span>
-    <span class="nf">mov</span> <span class="nb">esi</span><span class="p">,</span> <span class="p">[</span><span class="nv">r14</span> <span class="o">+</span> <span class="nb">rcx</span><span class="o">*</span><span class="mi">4</span><span class="p">]</span>    <span class="c1">; use RCX to index AddressOfNames getting cur func name RVA</span>
+    <span class="nf">mov</span> <span class="nb">esi</span><span class="p">,</span> <span class="p">[</span><span class="nv">r14</span> <span class="o">+</span> <span class="nb">rcx</span><span class="o">*</span><span class="mi">4</span><span class="p">]</span> <span class="c1">; use rcx to index AddressOfNames getting cur func name RVA</span>
     <span class="nf">add</span> <span class="nb">rsi</span><span class="p">,</span> <span class="nb">rbx</span>
 
   <span class="c1">; hash export name to compare to imp tbl entry</span>
@@ -928,7 +928,7 @@ import+0x1000:
     <span class="nf">cmp</span> <span class="nb">rcx</span><span class="p">,</span> <span class="nv">r12</span>
     <span class="nf">jl</span> <span class="nv">find_exports</span>
 
-    <span class="c1">; rcx big enough because size of # exports</span>
+  <span class="c1">; rcx big enough because size of # exports</span>
   <span class="nl">next_dll:</span>
     <span class="nf">mov</span> <span class="nb">rdi</span><span class="p">,</span> <span class="nb">rbp</span>
     <span class="nf">xor</span> <span class="nb">eax</span><span class="p">,</span> <span class="nb">eax</span>
@@ -956,9 +956,9 @@ import+0x1000:
     <span class="nf">xor</span> <span class="nb">ecx</span><span class="p">,</span> <span class="nb">ecx</span>
     <span class="nf">call</span> <span class="p">[</span><span class="nv">ExitProcess</span><span class="p">]</span>
 
-  <span class="c1">; ---------------------------------------------------</span>
+
   <span class="nf">_msg</span> <span class="nv">db</span> <span class="s">&#39;hello tiny world!&#39;</span><span class="p">,</span> <span class="mi">0</span>
-  <span class="c1">; ---------------------------------------------------</span>
+
 
   <span class="nf">macro</span> <span class="nv">import_start</span> <span class="err">{}</span>
   <span class="nf">macro</span> <span class="nv">import_end</span> <span class="err">{</span> <span class="nv">dd</span> <span class="mi">0</span> <span class="err">}</span>
@@ -1003,6 +1003,7 @@ import+0x1000:
 
   <span class="c1">; 115 bytes table, 172 bytes import asm</span>
   <span class="c1">; equivalent default imp table is 358 bytes saving 71 bytes already</span>
+  <span class="c1">; with this small table</span>
   <span class="k">import</span><span class="nv">_start</span>
     <span class="nf">use</span> <span class="s">&#39;kernel32&#39;</span><span class="p">,</span><span class="err">\</span>
       <span class="nf">AcquireSRWLockExclusive</span><span class="p">,</span><span class="err">\</span>
