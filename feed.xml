@@ -1,0 +1,998 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>emsea</title>
+    <description>random blog</description>
+    <link>http://localhost:4000/</link>
+    <atom:link href="http://localhost:4000/feed.xml" rel="self" type="application/rss+xml"/>
+    <pubDate>Mon, 04 Dec 2017 18:02:59 -0800</pubDate>
+    <lastBuildDate>Mon, 04 Dec 2017 18:02:59 -0800</lastBuildDate>
+    <generator>Jekyll v3.6.2</generator>
+    
+      <item>
+        <title>Import by Hash in x64 Assembly</title>
+        <description>&lt;h2&gt;Introduction&lt;/h2&gt;
+
+&lt;p&gt;The goal of this post is to write a small chunk of x64 assembly which performs a subset of the functionality provided by the Windows &lt;a href=&quot;https://en.wikipedia.org/wiki/Portable_Executable&quot;&gt;PE&lt;/a&gt; loader and locates function addresses in DLLs. It will store the hash of function name strings we want to import from DLLs and will populate a table of function pointers. We will be using &lt;a href=&quot;https://flatassembler.net/&quot;&gt;fasm&lt;/a&gt; as our assembler of choice due to its powerful macro capabilities. To explore our process&amp;#39; memory as well as looking at offsets of structure fields, we will be using &lt;a href=&quot;https://developer.microsoft.com/en-us/windows/hardware/download-windbg&quot;&gt;WinDbg&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;The primary motivation for writing our own code to import functions from DLLs is to create small binaries. The import tables that compilers and assemblers normally produce can be quite large and storing the hashes of function names is a lot more compact than storing the equivalent ASCII strings. It also is a great learning device as it&amp;#39;s placed at the intersection of multiple topics including x64 assembly and executable file formats.&lt;/p&gt;
+
+&lt;p&gt;The code samples are heavily commented and written with people who don&amp;#39;t have a lot of experience with Windows or assembly language in mind. This could help you or could annoy you. If you fall into the latter category the full code is produced at the end of the post and isn&amp;#39;t verbosely annotated. Additionally, the WinDbg examples should be understandable even if you&amp;#39;ve never used the debugger before as each command is annotated. I have minimally stripped some output to make things more clear.&lt;/p&gt;
+
+&lt;p&gt;If you want to learn more about assembly language, links to interesting resources are provided at the end of the post.&lt;/p&gt;
+
+&lt;h2&gt;The PE file format&lt;/h2&gt;
+
+&lt;p&gt;The Portable Executable file format is used for files with extensions such as &lt;code&gt;.exe&lt;/code&gt;, &lt;code&gt;.dll&lt;/code&gt; and others. It has various headers containing metadata which describe the file as a whole as well as the various sections of data contained within the binary (section A contains machine code while section B consists of data used for global variables referenced by the code, etc). These headers are used by the Windows loader to &lt;a href=&quot;https://en.wikipedia.org/wiki/Memory-mapped_file&quot;&gt;map&lt;/a&gt; binaries into a process&amp;#39; &lt;a href=&quot;https://en.wikipedia.org/wiki/Virtual_memory&quot;&gt;virtual address space&lt;/a&gt; and set the header-specified permissions (read, write, execute) on the mapped pages containing the sections. While &lt;code&gt;.exe&lt;/code&gt; files are almost always used for programs which get their own address space before they are loaded, &lt;code&gt;.dll&lt;/code&gt; files are used as shared libraries which are loaded into the address space of an existing process. Since DLL files are mapped into address spaces to use the code and data resources contained within their sections, the PE headers of a DLL describe where those resources are. We won&amp;#39;t be covering the PE file format extensively and many things will be omitted. If you want to learn more &lt;a href=&quot;https://github.com/corkami/docs/blob/master/PE/PE.md&quot;&gt;this is a great resource&lt;/a&gt;. A general diagram of a PE file for the purpose of this post (after it has been mapped into memory) is as follows:&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;/img/pe.png&quot; alt=&quot;PE File&quot;&gt;&lt;/p&gt;
+
+&lt;p&gt;In this diagram, only the parts of the headers that we will be focusing on are shown. This doesn&amp;#39;t show the section headers which describe locations and metadata about each section, the sub-structures that are contained within the PE header, and more. We are primarily interested in the export directory of a DLL as it contains all the references to functions within the code section(s) of the DLL that we want to search for.&lt;/p&gt;
+
+&lt;p&gt;All data references (pointers) in the PE headers are stored as *RVA*s or Relative Virtual Addresses. RVAs are offsets from the beginning of the file (and in rare cases from the beginning of a section but you don&amp;#39;t have to worry about those). Pointers are stored this way because PE files can be loaded/relocated at different places in memory and the headers can&amp;#39;t assume a preferred base address. To find the address in our address space of an RVA in a DLL we have to have a pointer to the base address of the module that we add to the RVA. Data references in headers stored as RVAs will always be correct no matter where the module is loaded in memory as long as they are added to the correct base address. If our DLL is mapped into memory beginning at &lt;code&gt;0x400000&lt;/code&gt; and a field in our module&amp;#39;s header refers to a piece of data at RVA &lt;code&gt;0xFFF&lt;/code&gt; then the data is located at &lt;code&gt;0x400000 + 0xFFF = 0x0x400FFF&lt;/code&gt; in our address space. &lt;/p&gt;
+
+&lt;h3&gt;Creating a PE file in fasm&lt;/h3&gt;
+
+&lt;p&gt;The first thing we&amp;#39;re going to do is tell the assembler exactly what kind of binary we want. Because we want to use x64 instructions we are going to be using a 64 bit PE. This is almost exactly the same as a 32 bit PE but some header fields have been widened to 8 bytes from 4. There are different types of PE files and telling fasm that we want a &lt;code&gt;GUI&lt;/code&gt; PE means that a &lt;a href=&quot;https://web.archive.org/web/20170914092937/https://blogs.technet.microsoft.com/askperf/2009/10/05/windows-7-windows-server-2008-r2-console-host/&quot;&gt;console won&amp;#39;t be created for you&lt;/a&gt; when your process is initialized. The PE type is specified by a field in the PE headers and read by the Windows loader. Additionally, we tell the assembler that the entry point address to be put in the PE header, which is initially called by the loader, is going to be that of &lt;code&gt;find_kernel32&lt;/code&gt;. We will write &lt;code&gt;find_kernel32&lt;/code&gt; shortly. Let&amp;#39;s place these directives at the top of our file:&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-nasm&quot; data-lang=&quot;nasm&quot;&gt;&lt;span class=&quot;nf&quot;&gt;format&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;PE64&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;GUI&lt;/span&gt;
+&lt;span class=&quot;nf&quot;&gt;entry&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;find_kernel32&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;The last thing to note is that we won&amp;#39;t be explicitly specifying any sections in our binary. This causes fasm to create a single section named &lt;code&gt;.flat&lt;/code&gt; which has read, write, and execute permissions where all code and data is placed. Since we want to produce small binaries, this eliminates padding bytes that are inserted between multiple sections for purposes of alignment. However, be warned that binaries with sections that are writeable and executable can sometimes set off antivirus software.&lt;/p&gt;
+
+&lt;p&gt;Now that that&amp;#39;s out of the way we can start writing code!&lt;/p&gt;
+
+&lt;h2&gt;Import by hash&lt;/h2&gt;
+
+&lt;h3&gt;Find the base address of kernel32.dll&lt;/h3&gt;
+
+&lt;p&gt;The first thing we need to do after our entry point is called is to find the base (also called the module handle) of the kernel32.dll module in our address space. kernel32.dll is important as it contains the &lt;code&gt;LoadLibraryA&lt;/code&gt; function which can be used to map other DLLs into our address space. Every process on Windows has kernel32.dll mapped into its address space (along with ntdll.dll) as it contains code used in the user mode portion of process initialization. Finding the base address can be done a few ways but is normally found by going through the &lt;a href=&quot;https://en.wikipedia.org/wiki/Win32_Thread_Information_Block&quot;&gt;TEB&lt;/a&gt; (using one of the &lt;code&gt;fs&lt;/code&gt;/&lt;code&gt;gs&lt;/code&gt; segment registers depending on what processor mode you&amp;#39;re executing in) to the &lt;a href=&quot;https://en.wikipedia.org/wiki/Process_Environment_Block&quot;&gt;PEB&lt;/a&gt; and walking the module list pointed to by &lt;code&gt;InInitializationOrderModuleList&lt;/code&gt; field. This can take up a fair amount of instructions (even though kernel32.dll is basically always going to be the second list entry removing the need for looping logic) and we&amp;#39;re trying to take up as little space as possible. Luckily a trick which utilizes the fact that &lt;a href=&quot;https://blogs.msdn.microsoft.com/oldnewthing/20031008-00/?p=42223&quot;&gt;all memory allocations for user mode processes in Windows happen on 64K boundaries&lt;/a&gt; can be used to quickly obtain kernel32&amp;#39;s base with only a few instructions. All allocations performed by the kernel for a process in user mode such as those performed on behalf of &lt;code&gt;VirtualAllocEx&lt;/code&gt; and memory mappings are going to start on a multiple of 64K. We can see this in action by viewing a process with the VMMap tool from &lt;a href=&quot;https://docs.microsoft.com/en-us/sysinternals/&quot;&gt;Sysinternals&lt;/a&gt; which shows how a process&amp;#39; virtual address space is partitioned. We can see that every DLL image mapped into our process (as well as most sections of virtual memory shown by the tool) begins on a multiple of 64K as the bottom two bytes of the base address are zero&amp;#39;d out. We can also see the locations of kernel32.dll&amp;#39;s header and sections which all begin with a period.&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;/img/vmmap.png&quot; alt=&quot;Virtual Memory Map&quot;&gt;&lt;/p&gt;
+
+&lt;p&gt;What this means means is that if we have any pointer inside kernel32.dll we can align that pointer to 64K boundaries and check for the byte signature of the beginning of the DOS header of the DLL (&lt;code&gt;4d 5a&lt;/code&gt; which are the ASCII characters &lt;code&gt;MZ&lt;/code&gt;... you&amp;#39;ll see these bytes later). If it isn&amp;#39;t found, check for the signature at each previous multiple of 64K until the it is located. It also just so happens that we can find a suitable pointer off of the top of the stack because the return address of the function which calls your binary&amp;#39;s entry point is &lt;code&gt;BaseThreadInitThunk&lt;/code&gt; located within kernel32.dll.&lt;/p&gt;
+
+&lt;p&gt;The machine code for &lt;code&gt;KERNEL32!BaseThreadInitThunk&lt;/code&gt; is (in all versions of Windows since 7 and probably XP) placed by the linker used to link kernel32.dll at an offset in the file that ends up being loaded at an offset between 64K and 128K bytes from the start of the base address in memory. This means that we don&amp;#39;t necessarily need to iterate backwards checking every multiple of 64k as we know exactly which particular region our pointer falls under. This does depend on the particular build of kernel32.dll but has shown to be effective for many versions of Windows. We&amp;#39;re having fun, not writing bullet-proof production code. We can see how this makes sense in the VMMap screenshot as the &lt;code&gt;.text&lt;/code&gt; section (which is the typical name for code sections and contains &lt;code&gt;BaseThreadInitThunk&lt;/code&gt;) is adjacent to the header of kernel32.dll. The easiest way to align a pointer to 64K is to zero out the bottom two bytes of the address it points to. Let&amp;#39;s inspect the environment that is set up for us right before our entry point called in WinDbg:&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;(3fac.10dc): Break instruction exception - code 80000003 (first chance)
+ntdll!LdrpDoDebuggerBreak+0x30:
+00007ffb`2a802e9c cc              int     3
+&amp;gt; bp $exentry  ;* Set a BreakPoint on the program entry point
+&amp;gt; g            ;* Go run the program to initialize the process and stop at our breakpoint
+Breakpoint 0 hit
+import+0x1000:
+00000000`00401000 488b1c24        mov     rbx,qword ptr [rsp]
+
+&amp;gt; k ;* Print the state of the stacK after the process init code has ran
+ # Child-SP          RetAddr           Call Site
+00 00000000`0008ff58 00007ffb`29d31fe4 import+0x1000
+01 00000000`0008ff60 00007ffb`2a79ef91 KERNEL32!BaseThreadInitThunk+0x14
+02 00000000`0008ff90 00000000`00000000 ntdll!RtlUserThreadStart+0x21
+
+&amp;gt; ln 00007ffb`29d31fe4 ;* List the Nearest preceding symbol that this address could belong to
+(00007ffb`29d31fd0) KERNEL32!BaseThreadInitThunk+0x14
+&amp;gt; * ^ This is exactly what we were expecting especially considering that the 01
+&amp;gt; *   stack entry&amp;#39;s call site is to BaseThreadInitThunk
+
+&amp;gt; lm ;* List loaded Modules
+start             end                 module name
+00000000`00400000 00000000`00402000   import     (no symbols)
+00007ffb`27540000 00007ffb`277a6000   KERNELBASE   (deferred)
+00007ffb`29d20000 00007ffb`29dce000   KERNEL32   (pdb symbols)
+00007ffb`2a730000 00007ffb`2a910000   ntdll      (pdb symbols)
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;When our breakpoint is hit we looked at the stack and found the return address back to the function that called our entry point to be &lt;code&gt;00007ffb`29d31fe4&lt;/code&gt;. If we &lt;strong&gt;l&lt;/strong&gt;ist the &lt;strong&gt;n&lt;/strong&gt;earest symbol to that address we see that we will return back to &lt;code&gt;KERNEL32!BaseThreadInitThunk+0x14&lt;/code&gt;. Let&amp;#39;s align this address to 64K and then subtract 64K like we previously discussed. Dumping the memory after we have computed our new address yields:&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;&amp;gt; db 00007ffb`29d30000 - 0x10000 ;* Dump Bytes at the computed address
+00007ffb`29d20000  4d 5a 90 00 03 00 00 00-04 00 00 00 ff ff 00 00  MZ..............
+00007ffb`29d20010  b8 00 00 00 00 00 00 00-40 00 00 00 00 00 00 00  ........@.......
+00007ffb`29d20020  00 00 00 00 00 00 00 00-00 00 00 00 00 00 00 00  ................
+00007ffb`29d20030  00 00 00 00 00 00 00 00-00 00 00 00 e8 00 00 00  ................
+00007ffb`29d20040  0e 1f ba 0e 00 b4 09 cd-21 b8 01 4c cd 21 54 68  ........!..L.!Th
+00007ffb`29d20050  69 73 20 70 72 6f 67 72-61 6d 20 63 61 6e 6e 6f  is program canno
+00007ffb`29d20060  74 20 62 65 20 72 75 6e-20 69 6e 20 44 4f 53 20  t be run in DOS 
+00007ffb`29d20070  6d 6f 64 65 2e 0d 0d 0a-24 00 00 00 00 00 00 00  mode....$.......
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;Notice how we aligned the address we found at the top of the stack for the dump computation as the bottom two bytes are zero&amp;#39;d out. What you&amp;#39;re seeing is the bytes of the DOS header signaling the beginning of kernel32.dll in our address space! Now let&amp;#39;s write write some code. The following snippet finds the base of kernel32.dll assuming that the top of the stack contains the return address to &lt;code&gt;KERNEL32!BaseThreadInitThunk&lt;/code&gt;:&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-nasm&quot; data-lang=&quot;nasm&quot;&gt;&lt;span class=&quot;c1&quot;&gt;; Obtain base of kernel32.dll in our address space in rbx&lt;/span&gt;
+&lt;span class=&quot;nl&quot;&gt;find_kernel32:&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; In fasm a label or symbolic constant beginning with a period is local&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; to the most recent non-local label thus .alloc_granularity &amp;quot;belongs&amp;quot;&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; to find_kernel32&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.alloc_granularity&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;10000h&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; rbx = return address to kernel32 loader function BaseThreadInitThunk&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;rsp&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; Align address to 64k boundary by clearing bottom two bytes&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; of pointer stored in rbx (0xFFFF = 65535 = 64*1024 - 1)&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; xoring a register with itself produces 0 and is the idiomatic way&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; of zeroing a register on x86 processors&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;xor&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;bx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;bx&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; Go back 1 multiple of 64k to get the base of the kernel32.dll module&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;sub&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;.alloc_granularity&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; ** Don&amp;#39;t worry about these. We&amp;#39;ll come back to them later&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;lea&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbp&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;__imp_tab_start&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;sub&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rsp&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;8&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;5&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;There are calling conventions that assembly programmers have to follow when invoking functions provided by APIs and from other DLLs. This greatly affects how you structure your code. However, because we are writing a stub of code which executes before the real meat of the program, we can elide some of the normal conventions that well-structured assembly code usually employs (in the name of size of course). One of our conventions is going to be storing the base address of the current module we&amp;#39;re importing from into &lt;code&gt;rbx&lt;/code&gt; to readily be able to turn RVAs into virtual addresses. We will minimize the use of the stack as much as possible.&lt;/p&gt;
+
+&lt;h3&gt;Get the export directory&lt;/h3&gt;
+
+&lt;p&gt;Now that we have the base address of kernel32.dll in &lt;code&gt;rbx&lt;/code&gt;, we need to parse the headers of the DLL in memory to locate the export directory. All PE files immediately begin with the DOS header which is a valid DOS program that normally spits out an error message about the module not being loaded on Windows. To locate the export directory we first need to obtain the RVA of the PE header which is provided by the &lt;code&gt;e_lfanew&lt;/code&gt; field in the DOS header structure. The problem is that we aren&amp;#39;t writing our importer in C and don&amp;#39;t have the convenience of a compiler figuring out the offset of that field from the struct definition. We can quickly remedy this by using WinDbg to &lt;strong&gt;d&lt;/strong&gt;isplay the &lt;strong&gt;t&lt;/strong&gt;ype of the debug symbols representing the DOS header struct &lt;code&gt;IMAGE_DOS_HEADER&lt;/code&gt;:&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;&amp;gt; dt _IMAGE_DOS_HEADER
+ntdll!_IMAGE_DOS_HEADER
+   +0x000 e_magic          : Uint2B
+   +0x002 e_cblp           : Uint2B
+   +0x004 e_cp             : Uint2B
+   +0x006 e_crlc           : Uint2B
+   +0x008 e_cparhdr        : Uint2B
+   +0x00a e_minalloc       : Uint2B
+   +0x00c e_maxalloc       : Uint2B
+   +0x00e e_ss             : Uint2B
+   +0x010 e_sp             : Uint2B
+   +0x012 e_csum           : Uint2B
+   +0x014 e_ip             : Uint2B
+   +0x016 e_cs             : Uint2B
+   +0x018 e_lfarlc         : Uint2B
+   +0x01a e_ovno           : Uint2B
+   +0x01c e_res            : [4] Uint2B
+   +0x024 e_oemid          : Uint2B
+   +0x026 e_oeminfo        : Uint2B
+   +0x028 e_res2           : [10] Uint2B
+   +0x03c e_lfanew         : Int4B
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;As we can see, the offset of the &lt;code&gt;e_lfanew&lt;/code&gt; field is &lt;code&gt;0x3C&lt;/code&gt; bytes from the start of &lt;code&gt;IMAGE_DOS_HEADER&lt;/code&gt; (and also from the base address of our kernel32 module). Now we can use that to get the RVA of the PE header: &lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-nasm&quot; data-lang=&quot;nasm&quot;&gt;&lt;span class=&quot;c1&quot;&gt;; Find the export directory given the base address of kernel32.dll in rbx&lt;/span&gt;
+&lt;span class=&quot;nl&quot;&gt;find_export_dir:&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.e_lfanew&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;3Ch&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; eax = the RVA of the PE header. We use eax instead of rax because&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; e_lfanew is a 4 byte (dword) field in the structure. If rax were used we would&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; be reading 8 bytes (qword) from the addressing-mode computed pointer. This pointer &lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; size deduction is performed by the assembler to generate the correct opcode&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;.e_lfanew&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;Note that whenever we modify the register-addressed lower 32 bit component of a 64 bit register, the upper 32 bits of the 64 bit register is zero&amp;#39;d out. Thus, even if &lt;code&gt;rax&lt;/code&gt; had a bunch of junk in its upper 32 bits moving a value into &lt;code&gt;eax&lt;/code&gt; would zero it out making &lt;code&gt;rax&lt;/code&gt; hold the same value as &lt;code&gt;eax&lt;/code&gt;. This turns out to be extremely useful when pulling dword sized RVAs out of a dereferenced pointer and then adding that RVA to the module base address contained in &lt;code&gt;rbx&lt;/code&gt;. Remember: all sizes have to match in valid instructions so you can only add 64 bit values to other 64 bit values, etc.&lt;/p&gt;
+
+&lt;p&gt;Now that we have the RVA of the PE header all we have to do is add it to the base address in &lt;code&gt;rbx&lt;/code&gt; and we&amp;#39;ll have the virtual address. However, what are we going to do after we have the virtual address of the PE header? First lets examine the PE header (&lt;a href=&quot;https://msdn.microsoft.com/en-us/library/windows/desktop/ms680336(v=vs.85).aspx&quot;&gt;&lt;code&gt;IMAGE_NT_HEADERS&lt;/code&gt;&lt;/a&gt;) symbols in WinDbg:&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;&amp;gt; dt -r _IMAGE_NT_HEADERS64 ;* The -r switch recursively displays nested structures
+ntdll!_IMAGE_NT_HEADERS64
+   +0x000 Signature        : Uint4B
+   +0x004 FileHeader       : _IMAGE_FILE_HEADER
+      +0x000 Machine          : Uint2B
+      +0x002 NumberOfSections : Uint2B
+      +0x004 TimeDateStamp    : Uint4B
+      +0x008 PointerToSymbolTable : Uint4B
+      +0x00c NumberOfSymbols  : Uint4B
+      +0x010 SizeOfOptionalHeader : Uint2B
+      +0x012 Characteristics  : Uint2B
+   +0x018 OptionalHeader   : _IMAGE_OPTIONAL_HEADER64
+      +0x000 Magic            : Uint2B
+      +0x002 MajorLinkerVersion : UChar
+      +0x003 MinorLinkerVersion : UChar
+      +0x004 SizeOfCode       : Uint4B
+      +0x008 SizeOfInitializedData : Uint4B
+      +0x00c SizeOfUninitializedData : Uint4B
+      +0x010 AddressOfEntryPoint : Uint4B
+      +0x014 BaseOfCode       : Uint4B
+      +0x018 ImageBase        : Uint8B
+      +0x020 SectionAlignment : Uint4B
+      +0x024 FileAlignment    : Uint4B
+      +0x028 MajorOperatingSystemVersion : Uint2B
+      +0x02a MinorOperatingSystemVersion : Uint2B
+      +0x02c MajorImageVersion : Uint2B
+      +0x02e MinorImageVersion : Uint2B
+      +0x030 MajorSubsystemVersion : Uint2B
+      +0x032 MinorSubsystemVersion : Uint2B
+      +0x034 Win32VersionValue : Uint4B
+      +0x038 SizeOfImage      : Uint4B
+      +0x03c SizeOfHeaders    : Uint4B
+      +0x040 CheckSum         : Uint4B
+      +0x044 Subsystem        : Uint2B
+      +0x046 DllCharacteristics : Uint2B
+      +0x048 SizeOfStackReserve : Uint8B
+      +0x050 SizeOfStackCommit : Uint8B
+      +0x058 SizeOfHeapReserve : Uint8B
+      +0x060 SizeOfHeapCommit : Uint8B
+      +0x068 LoaderFlags      : Uint4B
+      +0x06c NumberOfRvaAndSizes : Uint4B
+      +0x070 DataDirectory    : [16] _IMAGE_DATA_DIRECTORY
+         +0x000 VirtualAddress   : Uint4B
+         +0x004 Size             : Uint4B
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;At the bottom of this listing we can see the &lt;code&gt;DataDirectory&lt;/code&gt; array field of the &lt;code&gt;OptionalHeader&lt;/code&gt;. This contains the various directories of metadata for the DLL. The first data directory contains the export directory which is what we&amp;#39;re looking for. As such, the RVA of the export directory is contained in &lt;code&gt;OptionalHeader.DataDirectory[0].VirtualAddress&lt;/code&gt;. Because we want the &lt;code&gt;VirtualAddress&lt;/code&gt; (the first element in the &lt;code&gt;IMAGE_DATA_DIRECTORY&lt;/code&gt; structure) and the zeroth element of the &lt;code&gt;DataDirectory&lt;/code&gt; array, the RVA of the export directory is located an an offset of simply &lt;code&gt;0x70&lt;/code&gt; from the base of &lt;code&gt;OptionalHeader&lt;/code&gt;. However, we have the RVA of the PE header struct &lt;code&gt;IMAGE_NT_HEADER&lt;/code&gt; in &lt;code&gt;rax&lt;/code&gt;. If the offset of the &lt;code&gt;OptionalHeader&lt;/code&gt; is &lt;code&gt;0x18&lt;/code&gt; and the offset from the start of the &lt;code&gt;OptionalHeader&lt;/code&gt; to the export directory (zero&amp;#39;th data directory) is &lt;code&gt;0x70&lt;/code&gt; then the offset of the export directory from the start of the PE header is &lt;code&gt;0x18 + 0x70 = 0x88&lt;/code&gt;. Using this new offset we can obtain the virtual address of the export directory as follows:&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-nasm&quot; data-lang=&quot;nasm&quot;&gt;    &lt;span class=&quot;nf&quot;&gt;.data_dir_0&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;88h&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; Before this instruction rax is the RVA of the start of the PE header. By adding it &lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; to rbx we obtain the virtual address of the PE header in our address space. We can &lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; stuff the offset of the export directory into the addressing mode calculation here&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; as well. This saves a byte it remove the need for an additional add instruction to&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; add .data_dir_0 to the base of the PE header. eax now contains the RVA of the export &lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; directory&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;.data_dir_0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; rax is the RVA to the export directory for kernel32 so we need to make it a real virtual &lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; address to access the export directory structure.&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;add&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;h3&gt;Start reading the export directory&lt;/h3&gt;
+
+&lt;p&gt;After the previous snippets have executed &lt;code&gt;rax&lt;/code&gt; holds the virtual address of the export directory. Now we have to rip the data out of this structure to perform the main importing process. Let&amp;#39;s take a peek at the export directory struct to find the fields that we need:&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;&amp;gt; dt IMAGE_EXPORT_DIRECTORY
+ole32!IMAGE_EXPORT_DIRECTORY
+   +0x000 Characteristics  : Uint4B
+   +0x004 TimeDateStamp    : Uint4B
+   +0x008 MajorVersion     : Uint2B
+   +0x00a MinorVersion     : Uint2B
+   +0x00c Name             : Uint4B
+   +0x010 Base             : Uint4B
+   +0x014 NumberOfFunctions : Uint4B
+   +0x018 NumberOfNames    : Uint4B
+   +0x01c AddressOfFunctions : Uint4B
+   +0x020 AddressOfNames   : Uint4B
+   +0x024 AddressOfNameOrdinals : Uint4B
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;The fields of interest are &lt;code&gt;NumberOfNames&lt;/code&gt;, &lt;code&gt;AddressOfFunctions&lt;/code&gt;, &lt;code&gt;AddressOfNames&lt;/code&gt;, and &lt;code&gt;AddressOfNameOrdinals&lt;/code&gt;. Let&amp;#39;s examine each of them in detail:&lt;/p&gt;
+
+&lt;h4&gt;AddressOfNames&lt;/h4&gt;
+
+&lt;p&gt;This is an array of RVAs pointing to zero-terminated ASCII strings of function names. All of the functions that a PE exports by name are going to be in this array. We will be walking through each of these names and computing their hash. This will be compared with the hash that we store in our own import table. The number of name entries in &lt;code&gt;AddressOfNames&lt;/code&gt; is held in &lt;code&gt;NumberOfNames&lt;/code&gt;. Every index into this array of a particular function name can be used to index into &lt;code&gt;AddressOfNameOrdinals&lt;/code&gt; to obtain the &lt;em&gt;name ordinal&lt;/em&gt; of the corresponding function.&lt;/p&gt;
+
+&lt;h4&gt;AddressOfNameOrdinals&lt;/h4&gt;
+
+&lt;p&gt;This field is an array of 16 bit shorts called &lt;em&gt;ordinals&lt;/em&gt; which are used as indexes into &lt;code&gt;AddressOfFunctions&lt;/code&gt;. There are more to ordinals outside of using them with &lt;code&gt;AddressOfNames&lt;/code&gt; but that is outside the scope of this article. The index of a particular function string RVA in &lt;code&gt;AddressOfNames&lt;/code&gt; is used to look up into &lt;code&gt;AddressOfNameOrdinals&lt;/code&gt; and get the correct index into &lt;code&gt;AddressOfFunctions&lt;/code&gt;.&lt;/p&gt;
+
+&lt;h4&gt;AddressOfFunctions&lt;/h4&gt;
+
+&lt;p&gt;Finally, this field is an array of RVAs which point to exported functions located within the various sections of the PE. It is indexed by the values obtained in &lt;code&gt;AddressOfNameOrdinals&lt;/code&gt;. &lt;/p&gt;
+
+&lt;h3&gt;Parsing the export directory&lt;/h3&gt;
+
+&lt;p&gt;Below is a diagram of all the three parallel arrays and the data which they refer to:&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;/img/export.png&quot; alt=&quot;Export Table&quot;&gt;&lt;/p&gt;
+
+&lt;p&gt;This diagram is a bit misleading in that the ASCII function names are from kernel32.dll but refer to ordinals that aren&amp;#39;t actually what they are in the real DLL. Hopefully the structure of the arrays is now clear. A feature of the export table that we will not be supporting is &lt;a href=&quot;https://blogs.msdn.microsoft.com/oldnewthing/20060719-24/?p=30473&quot;&gt;export forwarding&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;Now that we have our desired fields and their offsets we can write a few instructions to parse out the data into registers that we&amp;#39;ll use in the remaining sections of the importer:&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-nasm&quot; data-lang=&quot;nasm&quot;&gt;&lt;span class=&quot;c1&quot;&gt;; rax contains the virtual address of IMAGE_EXPORT_DIRECTORY&lt;/span&gt;
+&lt;span class=&quot;nl&quot;&gt;read_export_dir:&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.export_names_num&lt;/span&gt;  &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;18h&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.export_funcs_addr&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;1Ch&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.export_names_addr&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;20h&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.export_ords_addr&lt;/span&gt;  &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;24h&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; Obtain useful RVAs from IMAGE_EXPORT_DIRECTORY&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;r13d&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;.export_funcs_addr&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;c1&quot;&gt;; AddressOfFunctions&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;r14d&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;.export_names_addr&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;c1&quot;&gt;; AddressOfNames&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;r15d&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;.export_ords_addr&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;  &lt;span class=&quot;c1&quot;&gt;; AddressOfNameOrdinals&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; Why isn&amp;#39;t this mov above the others? This is intentional as it can be &lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; good practice to stuff independent instructions between the data fetching&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; instructions that load data from memory and instructions that deal with&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; the data after it has been fetched. Can you think of why? &lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;r12d&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;.export_names_num&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;  &lt;span class=&quot;c1&quot;&gt;; NumberOfNames (not an RVA)&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; Turn all RVAs into valid 64 bit virtual addresses&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;add&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;r13&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;add&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;r14&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;add&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;r15&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;We now have all of the information we need to start the importing process. Before we do that though, let&amp;#39;s take a detour and build the table where we&amp;#39;ll be placing the addresses of the functions we want to import.&lt;/p&gt;
+
+&lt;h3&gt;Building the import table&lt;/h3&gt;
+
+&lt;p&gt;Before we iterate over the parallel arrays &lt;code&gt;AddressOfNames&lt;/code&gt;, &lt;code&gt;AddressOfNameOrdinals&lt;/code&gt;, and &lt;code&gt;AddressOfFunctions&lt;/code&gt; let&amp;#39;s build the table where we&amp;#39;ll be storing the function pointers we want to import. By default, compilers and assemblers build a standard import table which is parsed by the Windows loader. In short, this table stores the ASCII string name of a DLL along with a list of tuples containing the ASCII string name of the function name in the DLL that the program wants to import along with 8 bytes (4 bytes for 32 bit binaries) of zeros that get overwritten by the Windows loader with the correct function pointer address of the corresponding function. All calls to imported functions are indirect calls through their corresponding import table entry which is fixed up when the module is loaded. &lt;/p&gt;
+
+&lt;p&gt;We will be building a similar table except we will store the 4 byte hash of the ASCII function name rather than the ASCII string itself. This will save a lot of bytes if the import table is large enough because Windows API function names can be quite long. To build our table we will be using fasm&amp;#39;s powerful macro language to make a macro which takes a DLL and a list of functions to import from it and outputs the bytes of corresponding table entries. We&amp;#39;ll be using these table entries in our importing code. One of the joys of using an assembler is having full control over the layout of data in your binary. While we could directly define the bytes of our custom import table entries manually, it would neither look nice nor be easily maintainable. As such, we will be using the full power of the assembler and creating a metaprogram which does all the work for us. The syntax of fasm&amp;#39;s macro language is vaguely analogous to &lt;a href=&quot;https://en.wikipedia.org/wiki/AWK&quot;&gt;AWK&lt;/a&gt;. You don&amp;#39;t have to worry too much much about the macro itself, just understand the format of the bytes that are produced. An example of the output will follow after the macro listing. If you want to understand fasm&amp;#39;s macro syntax more you should look at the &lt;a href=&quot;https://flatassembler.net/docs.php?article=manual&quot;&gt;fasm Programmer&amp;#39;s Manual&lt;/a&gt; and the &lt;a href=&quot;https://bos.asmhackers.net/docs/FASM%20tutorial/preproc.html&quot;&gt;fasm Preprocessor Guide&lt;/a&gt;.&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-nasm&quot; data-lang=&quot;nasm&quot;&gt;&lt;span class=&quot;c1&quot;&gt;; Our macro will be used as follows:&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;;   use &amp;#39;kernel32&amp;#39;, LoadLibraryA, ExitProcess&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;;   use &amp;#39;user32&amp;#39;,\&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;;       MessageBoxA,\&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;;       DestroyWindow&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; The first argument to each use macro is the name of the DLL that we want to import&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; functions from. To save bytes we won&amp;#39;t be including the .dll extension in the file name.&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; Notice that we can continue the arguments to the macro on a new line using a backslash.&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; Because we will be using LoadLibraryA to load DLLs into our address space, we will need &lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; to store the ASCII string name of the DLL. This string is going to be bound to the first &lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; argument of use simply called dll. The rest of the arguments are the list of functions&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; we want to import from the DLL and are a part of the [imp_name] list.&lt;/span&gt;
+
+&lt;span class=&quot;nf&quot;&gt;macro&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;use&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;dl&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;l&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;imp_name&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; For every invocation of use, common blocks will only be evaluated a single &lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; time and then the next block will be evaluated&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;common&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; This will define the current import number for the table&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; it&amp;#39;s used further down in the macro&lt;/span&gt;
+        &lt;span class=&quot;nf&quot;&gt;imp_num&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
+
+        &lt;span class=&quot;c1&quot;&gt;; The next 3 lines are a bit tricky so let&amp;#39;s break them down.&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; The first thing to know is that @@ is an anonymous label. This&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; means that an offset in the file is recorded where the @@: is placed&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; but it doesn&amp;#39;t have a name to be able to directly reference. To refer&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; to these types of labels @f and @b evaluate to the offsets designated&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; by the next or preceding @@ label respectively. $ is the current offset&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; in the file. We will cover the `@f - $` expression shortly.&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;;&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; db defines bytes in the file exactly where you specify. By passing a&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; string to db (such as the one in dll) it will define the ASCII string&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; bytes sequentially. After that we immediately define a null byte to&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; terminate the DLL string. The align directive will continue to insert&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; padding bytes at the current location until the offset is a mulitple of&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; the number you pass to it. Therefore the @@: label will refer to a file&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; offset that is a multiple of 8 bytes. This will be important later.&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;;&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; After all of that, we can understand the purpose of `@f - $`: it&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; defines a byte whos value is the size of the DLL string including &lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; the null byte and the padding bytes that are used to align whatever &lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; the next data definition is. This is used by the import code to jump&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; over the file name and alignment bytes to the first entry of the table.&lt;/span&gt;
+        &lt;span class=&quot;kd&quot;&gt;db&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;f&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&lt;/span&gt; &lt;span class=&quot;kc&quot;&gt;$&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;dl&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;l&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;align&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;8&lt;/span&gt;
+        &lt;span class=&quot;err&quot;&gt;@@:&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; Forward blocks are implicit looping constructs. When you have a macro&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; argument surrounded by brackets like [imp_name] (denoting a list) the &lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; body of forward will be evaluated for every item in [imp_name]. For every&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; iteration, the current item will be bound to the imp_name symbol&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;forward&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; Local variables to the current forward block&lt;/span&gt;
+        &lt;span class=&quot;nf&quot;&gt;local&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;imp&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;imp_len&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;h&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;c&lt;/span&gt;
+
+        &lt;span class=&quot;c1&quot;&gt;; In fasm, virtual is how you &amp;quot;allocate&amp;quot; memory in macros. It creates a &lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; space where you can freely define bytes into to read out later. These &lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; don&amp;#39;t get automatically put in your binary. We create the virtual space&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; at 0 because all of the offsets in the space (such as those obtained&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; using $) will start from this number. &lt;/span&gt;
+        &lt;span class=&quot;nf&quot;&gt;virtual&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;at&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
+            &lt;span class=&quot;c1&quot;&gt;; Double colon to allow code outside the virtual to access this label&lt;/span&gt;
+            &lt;span class=&quot;c1&quot;&gt;; and pull data out of our virtual space. Read the fasm Programmer&amp;#39;s&lt;/span&gt;
+            &lt;span class=&quot;c1&quot;&gt;; Manual for more details&lt;/span&gt;
+            &lt;span class=&quot;nl&quot;&gt;imp:&lt;/span&gt;&lt;span class=&quot;err&quot;&gt;:&lt;/span&gt;
+                &lt;span class=&quot;c1&quot;&gt;; Remember how the function names we want to import aren&amp;#39;t quoted&lt;/span&gt;
+                &lt;span class=&quot;c1&quot;&gt;; strings? We&amp;#39;ll use ` to stringify them and define their bytes &lt;/span&gt;
+                &lt;span class=&quot;kd&quot;&gt;db&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;`&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;imp_name&lt;/span&gt;
+                &lt;span class=&quot;kd&quot;&gt;db&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
+
+            &lt;span class=&quot;c1&quot;&gt;; The virtual space starts at 0 so $ is going to be the number of&lt;/span&gt;
+            &lt;span class=&quot;c1&quot;&gt;; bytes in the string which we assign to imp_len&lt;/span&gt;
+            &lt;span class=&quot;nf&quot;&gt;imp_len&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;kc&quot;&gt;$&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;
+        &lt;span class=&quot;nf&quot;&gt;end&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;virtual&lt;/span&gt;
+
+        &lt;span class=&quot;c1&quot;&gt;; Now that we have our import name as a string of bytes defined in a&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; virtual block, we will iterate over each byte in the block and&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; hash the entire string. The details about this particular hashing&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; algorithm (djb2) is discussed later. All you have to know now is that&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; after the while loop the h variable contains the hash of the function&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; name we want to import.&lt;/span&gt;
+        &lt;span class=&quot;nf&quot;&gt;i&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
+        &lt;span class=&quot;nf&quot;&gt;h&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;5381&lt;/span&gt;
+        &lt;span class=&quot;nf&quot;&gt;while&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;i&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;imp_len&lt;/span&gt;
+            &lt;span class=&quot;c1&quot;&gt;; Load the next byte out of our virtual block&lt;/span&gt;
+            &lt;span class=&quot;nf&quot;&gt;load&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;c&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;byte&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;from&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;imp&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;i&lt;/span&gt;
+
+            &lt;span class=&quot;c1&quot;&gt;; This hashing algorithm purposefully overflows a 4 byte integer.&lt;/span&gt;
+            &lt;span class=&quot;c1&quot;&gt;; fasm numbers aren&amp;#39;t bounded that way so we must manually allow&lt;/span&gt;
+            &lt;span class=&quot;c1&quot;&gt;; the overflow to happen using a modulus operation&lt;/span&gt;
+            &lt;span class=&quot;nf&quot;&gt;h&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;((&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;h&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;shl&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;5&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;h&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;c&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;mod&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;0x100000000&lt;/span&gt;
+            &lt;span class=&quot;nf&quot;&gt;i&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;i&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;
+        &lt;span class=&quot;nf&quot;&gt;end&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;while&lt;/span&gt;
+
+        &lt;span class=&quot;c1&quot;&gt;; We will always import from kernel32.dll first so it will always be&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; the first DLL in our import table. Additionally, if the current &lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; import entry number is 0 then we are at the start of the table.&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; `#__imp_tab_start` defines a global label which refers to this first&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; entry that we will want to populate into.&lt;/span&gt;
+        &lt;span class=&quot;nf&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;dl&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;l&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;eq&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&amp;#39;kernel32&amp;#39;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;imp_num&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
+            &lt;span class=&quot;err&quot;&gt;#&lt;/span&gt;&lt;span class=&quot;nl&quot;&gt;__imp_tab_start:&lt;/span&gt;
+        &lt;span class=&quot;nf&quot;&gt;end&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;if&lt;/span&gt;
+
+        &lt;span class=&quot;c1&quot;&gt;; Remember the `align 8` directive above? The following label refers to an&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; offset which is a multiple of 8 bytes. This is true for all table entries &lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; because the following data definition defines 8 bytes which means the next &lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; label will fall on an 8 byte boundary as well.&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;;&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; This alignment is useful because this line defines a label that is 8 bytes&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; long in size (for the purposes of fasm&amp;#39;s size checking when moving into&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; registers). The label keyword defines a global label in the program that&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; we can use to refer to the particular import. Therefore if LoadLibraryA&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; appeared in a list of functions we wanted to import from kernel32, then&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; there would be a label defined with the same name that refers to its&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; offset in this table. To call this function we would move its argument&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; into the right register and then issue a `call [LoadLibraryA]`. Notice how&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; we are calling through the label because the LoadLibraryA label refers to&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; a function pointer. As users of our importer are going to be calling through&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; this label a lot we want it to be aligned to 8 bytes for performance reasons.&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; Even though it isn&amp;#39;t a big deal to access unaligned data on modern hardware, &lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; it is still good practice to reasonably align all of your data.&lt;/span&gt;
+        &lt;span class=&quot;nf&quot;&gt;label&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;imp_name&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;qword&lt;/span&gt;
+
+        &lt;span class=&quot;c1&quot;&gt;; Since h is the computed hash of the importd function we will define it as&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; a 4 byte value (dd stands for define dword) followed by a zero. Both of&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; these dwords combined are 8 bytes in size (a qword). After the hash of the&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; function is found by the import code and then the corresponding entry is&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; located, the entire 8 bytes is replaced with the fixed-up address of the&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; import. This saves 4 bytes because we can re-use the space taken up by the&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; hash itself after we don&amp;#39;t have a use for it anymore.&lt;/span&gt;
+        &lt;span class=&quot;kd&quot;&gt;dd&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;h&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
+
+        &lt;span class=&quot;c1&quot;&gt;; Increment the import number to prevent the previous if conditions from&lt;/span&gt;
+        &lt;span class=&quot;c1&quot;&gt;; evaluating to true&lt;/span&gt;
+        &lt;span class=&quot;nf&quot;&gt;imp_num&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;imp_num&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; Here we have another common block. This will be evaluated after the previous&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; common and forward blocks have ran and defined their bytes in the file. We&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; will define 8 bytes of zeros to signal to our importing code that there are&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; no more functions left to import from this particular DLL and to move onto the&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; next DLL&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;common&lt;/span&gt;
+        &lt;span class=&quot;kd&quot;&gt;dq&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;  &lt;span class=&quot;c1&quot;&gt;; Terminate table entry&lt;/span&gt;
+&lt;span class=&quot;err&quot;&gt;}&lt;/span&gt;
+
+&lt;span class=&quot;c1&quot;&gt;; Finally, this macro will define a 0 dword which will signal to our importing code&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; that there are no more DLLS that we want to import. We will sandwich the invocations&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; of our use macro with import_start and import_end&lt;/span&gt;
+&lt;span class=&quot;nf&quot;&gt;macro&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;import_end&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;dd&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;}&lt;/span&gt;
+
+&lt;span class=&quot;c1&quot;&gt;; This doesn&amp;#39;t do anything but if we need an import_end, then we should make our&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; importing syntax look nice by having an import_start :)&lt;/span&gt;
+&lt;span class=&quot;nf&quot;&gt;macro&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;import_start&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;{}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;Those macros aren&amp;#39;t the most appealing code in the world but it works pretty well. Note that we will start importing at &lt;code&gt;__imp_tab_start&lt;/code&gt; which points to the first hash of kernel32&amp;#39;s import table. This is because the first DLL that we are going to get the base of is kernel32 and we won&amp;#39;t have to load it into our address space. For reasons that we&amp;#39;ll learn of later, kernel32 will always need to be the first DLL that we import from with the use macro.&lt;/p&gt;
+
+&lt;p&gt;You don&amp;#39;t have to worry too much about the semantics of the code, just understand the following explanation of the bytes the macro builds. Let&amp;#39;s say that we invoked our various macros to build an import table:&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;import_start
+    use &amp;#39;kernel32&amp;#39;,\
+        AcquireSRWLockExclusive,\
+        GetProcessAffinityMask,\
+        LoadLibraryA,\
+        GetProcAddress,\
+        ExitProcess
+
+    use &amp;#39;user32&amp;#39;,\
+        DispatchMessageA,\
+        MessageBoxA,\
+        DestroyWindow
+import_end
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;After this table is placed in the binary which, the binary is then loaded into memory. Let&amp;#39;s assume that we know that it is located at address &lt;code&gt;00000000`004010de&lt;/code&gt;. Let&amp;#39;s dump that location to look at the bytes that we&amp;#39;ve built:&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;&amp;gt; db 00000000`004010de L 66  ;* display a Dump of Bytes 0x66 bytes Long
+00000000`004010de  0a 6b 65 72 6e 65 6c 33-32 00 0c bf e7 b7 00 00  .kernel32.......
+00000000`004010ee  00 00 4a 9d 70 74 00 00-00 00 5b 10 be 57 00 00  ..J.pt....[..W..
+00000000`004010fe  00 00 ff 1e 69 b5 00 00-00 00 5e a7 8f a4 00 00  ....i.....^.....
+00000000`0040110e  00 00 00 00 00 00 00 00-00 00 08 75 73 65 72 33  ...........user3
+00000000`0040111e  32 00 bb 6b ac 1f 00 00-00 00 34 ab 31 42 00 00  2..k......4.1B..
+00000000`0040112e  00 00 67 ef 07 a5 00 00-00 00 00 00 00 00 00 00  ..g.............
+00000000`0040113e  00 00 00 00 00 00    
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;The purpose of the size byte we calculated with &lt;code&gt;@f - $&lt;/code&gt; becomes a bit more clear: if you go &lt;code&gt;0x0a&lt;/code&gt; bytes ahead of &lt;code&gt;00000000`004010de&lt;/code&gt; the address we get is &lt;code&gt;00000000`004010e8&lt;/code&gt; which is clearly divisible by 8 and aligned. Looking at that address in the dump we can see the byte string &lt;code&gt;0c bf e7 b7&lt;/code&gt; which is the little-endian ordered bytes of the hash of the first import in our kernel32 table — &lt;code&gt;AcquireSRWLockExclusive&lt;/code&gt;. After the dword hash there are four bytes of zeros before the next export&amp;#39;s hash. When the 8 byte virtual address of &lt;code&gt;AcquireSRWLockExclusive&lt;/code&gt; is located from the export directory of kernel32.dll, it is stored into &lt;code&gt;00000000`004010e8&lt;/code&gt; and overwrites the bytes of the hash as well as the four bytes of zeros we defined. The global label that our macro defined for programmers to use to refer to the imported function is going to point to &lt;code&gt;00000000`004010e8&lt;/code&gt;. After the 4 bytes of zeros, we see the next hash corresponding to &lt;code&gt;GetProcessAffinityMask&lt;/code&gt;. If we keep going through all of our imports we will see that they are all defined in this way and all aligned to qword boundaries. How do we signal the end of the imports for kernel32? Look at address &lt;code&gt;00000000`00401110&lt;/code&gt; which is right after the qword entry associated with &lt;code&gt;ExitProcess&lt;/code&gt;. It&amp;#39;s 8 bytes of zeros signaling that there are no more imports for the kernel32 module. Our importing code will check to see if we have a hash that is zero and if so, will stop looking for imports associated with the kernel32 module. Immediately after this null entry we can see the size byte of the user32 import table. The final piece of the puzzle is located at &lt;code&gt;00000000`0040113c&lt;/code&gt; which is immediately after the terminating qword of the user32 table and is the 0 dword defined by &lt;code&gt;import_end&lt;/code&gt; This will be used to stop importing altogether if it is found and will cause the main body of the code to be jumped to as the importing process is finished. We&amp;#39;ll see the code for parsing this table shortly.&lt;/p&gt;
+
+&lt;h3&gt;Populate our import directory&lt;/h3&gt;
+
+&lt;p&gt;Let&amp;#39;s do a quick recap of the fields that registers &lt;code&gt;r12&lt;/code&gt;-&lt;code&gt;r15&lt;/code&gt; hold from the export table:&lt;/p&gt;
+
+&lt;table&gt;&lt;thead&gt;
+&lt;tr&gt;
+&lt;th style=&quot;text-align: center&quot;&gt;Register&lt;/th&gt;
+&lt;th&gt;Field&lt;/th&gt;
+&lt;th&gt;Description&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;&lt;tbody&gt;
+&lt;tr&gt;
+&lt;td style=&quot;text-align: center&quot;&gt;r12&lt;/td&gt;
+&lt;td&gt;NumberOfNames&lt;/td&gt;
+&lt;td&gt;The number of named functions exported&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td style=&quot;text-align: center&quot;&gt;r13&lt;/td&gt;
+&lt;td&gt;AddressOfFunctions&lt;/td&gt;
+&lt;td&gt;The start of the array of export RVAs&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td style=&quot;text-align: center&quot;&gt;r14&lt;/td&gt;
+&lt;td&gt;AddressOfNames&lt;/td&gt;
+&lt;td&gt;The start of the array of export ASCII names&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td style=&quot;text-align: center&quot;&gt;r15&lt;/td&gt;
+&lt;td&gt;AddressOfNameOrdinals&lt;/td&gt;
+&lt;td&gt;The array of ordinals mapping AddressOfNames to AddressOfFunctions&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;&lt;/table&gt;
+
+&lt;p&gt;We have all the information we need for locating imports as well as a place to put them and it&amp;#39;s time to iterate through the export data. We&amp;#39;ll be using &lt;code&gt;rcx&lt;/code&gt; as the index into the &lt;code&gt;AddressOfNames&lt;/code&gt; array pointed to by &lt;code&gt;r14&lt;/code&gt;. It holds the offset into the array of the current ASCII export name.&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-nasm&quot; data-lang=&quot;nasm&quot;&gt;    &lt;span class=&quot;c1&quot;&gt;; rcx is used as a counter in the find_exports loop so zero it out before the first &lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; iteration &lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;xor&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;ecx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;ecx&lt;/span&gt;
+
+&lt;span class=&quot;c1&quot;&gt;; This is the start of a loop that will be jumped to for every export of the current DLL&lt;/span&gt;
+&lt;span class=&quot;nl&quot;&gt;find_exports:&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; Use rcx to index AddressOfNames (stored in r14) and get the current ASCII export name.&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; The dword-sized RVA will be stored in rsi in particular because there is a useful&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; instruction we&amp;#39;ll be using which loads bytes pointed to by the rsi register&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;esi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;r14&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rcx&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;4&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; Turn the RVA into a VA so that rsi points to the string&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;add&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rsi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;Now we&amp;#39;ve set up our &lt;code&gt;find_exports&lt;/code&gt; loop and pointed &lt;code&gt;rsi&lt;/code&gt; to the ASCII string of the current export function. What are we going to do with this string? We&amp;#39;ll need to check if its hash is stored in the list of functions we want to import in our import table. To do that let&amp;#39;s compute its hash using &lt;a href=&quot;https://en.wikipedia.org/wiki/Daniel_J._Bernstein&quot;&gt;Daniel Bernstein&lt;/a&gt;&amp;#39;s classic &lt;a href=&quot;http://www.cse.yorku.ca/%7Eoz/hash.html&quot;&gt;djb2 algorithm&lt;/a&gt;:&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c&quot; data-lang=&quot;c&quot;&gt;&lt;span class=&quot;c1&quot;&gt;// Return hash of str using the djb2 algorithm&lt;/span&gt;
+&lt;span class=&quot;kt&quot;&gt;uint32_t&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;djb2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;uint8_t&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;str&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;kt&quot;&gt;uint32_t&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;hash&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;5381&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+    &lt;span class=&quot;kt&quot;&gt;uint32_t&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;c&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;// Make each character in str contribute to the&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;// resulting hash&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;while&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;c&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;str&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;hash&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;((&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;hash&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;&amp;lt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;5&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;hash&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;c&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;  &lt;span class=&quot;c1&quot;&gt;// hash * 33 + c&lt;/span&gt;
+
+    &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;hash&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;This is the exact algorithm that our macro above used to calculate the hashes stored in our import table. The djb2 algorithm resembles an &lt;a href=&quot;https://en.wikipedia.org/wiki/Linear_congruential_generator&quot;&gt;LCG&lt;/a&gt; and is easy to implement with very few instructions. Now that we have seen the C code it is straightforward to translate it to assembly:&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-nasm&quot; data-lang=&quot;nasm&quot;&gt;    &lt;span class=&quot;c1&quot;&gt;; Hash current export name to see if there are any matching entries in our&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; import table entry. rsi contains the address of the current &lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; export string in the export directory&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; edx contains our hash as its being computed (initialized with 5381)&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;edx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;5381&lt;/span&gt;
+&lt;span class=&quot;nl&quot;&gt;.djb2:&lt;/span&gt;           
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;edx&lt;/span&gt;  &lt;span class=&quot;c1&quot;&gt;; eax = hash before shl (shift left)&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;shl&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;edx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;5&lt;/span&gt;    &lt;span class=&quot;c1&quot;&gt;; hash * 32 (2^5 = 32)&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;add&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;edx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;  &lt;span class=&quot;c1&quot;&gt;; hash * 32 + hash = hash * 33&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; clear out the now-junk bytes in eax before loadsb&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; ... you&amp;#39;ll see why in a second&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;xor&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; lodsb loads one byte from the memory location pointed to&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; by the rsi register into al (least significant byte of rax) and &lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; then increments rsi by one. This incrementing is quite useful &lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; as it allows us to easily iterate through the ASCII import name&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;lodsb&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; Add our character to the hash just like the C version of&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; the algorithm. Remember how argument sizes must match. We&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; zero&amp;#39;d out eax because we cant add al to edx&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;add&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;edx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; This test instruction is doing a bitwise and operation between&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; its arguments to set the flags for the following jnz (jump if&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; zero flag is not set). &amp;amp;&amp;#39;ing a number with itself results in zero&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; and sets the zero flag only when the number is zero. This&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; instruction is checking if we have hit the NULL byte of the ASCII&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; function name string&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;test&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; Jump back to add the next character in the export string to our hash&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; only if there is more string data to process&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;jnz&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;.djb2&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; Utilize the dword hash in edx in the following snippet&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;Notice that we use the &lt;code&gt;lodsb&lt;/code&gt; instruction to load string bytes from &lt;code&gt;rsi&lt;/code&gt;. This instruction is part of a set collectively known as &amp;quot;string instructions&amp;quot; which make it easier to iterate over ranges of bytes. While they might not always be as fast as equivalent sequences of instructions which load bytes and increment pointers manually (this is because they are &lt;a href=&quot;https://en.wikipedia.org/wiki/Microcode&quot;&gt;microcoded&lt;/a&gt;), their opcodes don&amp;#39;t take up a lot of space. In this case the opcode for &lt;code&gt;lodsb&lt;/code&gt; only takes up a single byte. Writing your code around using conventional registers like &lt;code&gt;rsi&lt;/code&gt; in this way can add up to a sizeable amount of saved bytes!&lt;/p&gt;
+
+&lt;p&gt;Now that our hash function is implemented the only other thing to consider is hash collisions between imports. This could happen but as we&amp;#39;ll see later, the collision would need to happen between names of exported functions located within the &lt;em&gt;same&lt;/em&gt; DLL. This should be unlikely enough for our purposes. If someone is going to be using this method of importing it wouldn&amp;#39;t be too much to ask to mess around with the hashing algorithm or add more data to the hash like the name of the DLL itself to eliminate the collision should one arise.&lt;/p&gt;
+
+&lt;h4&gt;Quick aside&lt;/h4&gt;
+
+&lt;p&gt;We have the hash in &lt;code&gt;edx&lt;/code&gt; so now we need to compare it with the list of hashes of functions we want to import in our import table. However, how do we know where our import table is located? Remember those instructions at the bottom of the &lt;code&gt;find_kernel32&lt;/code&gt; snippet I said to temporarily ignore? Specifically &lt;code&gt;lea rbp, [__imp_tab_start]&lt;/code&gt; (we will cover the other instruction later). This loads the start of the import table into &lt;code&gt;rbp&lt;/code&gt; (the &lt;em&gt;base pointer&lt;/em&gt; register points to the &lt;em&gt;base&lt;/em&gt; of our import table) right before &lt;code&gt;find_export_dir&lt;/code&gt;. As we&amp;#39;ll see, after we are done importing everything we want from kernel32.dll we will jump back to &lt;code&gt;find_export_dir&lt;/code&gt;  with the base address of a new DLL in &lt;code&gt;rbx&lt;/code&gt; as well as  &lt;code&gt;rbp&lt;/code&gt; pointing to the next correct table and start the importing process all over again. To kick off the first iteration though, we have to initialize &lt;code&gt;rbp&lt;/code&gt; to the import table entries for kernel32.dll. That is why we defined &lt;code&gt;__imp_tab_start&lt;/code&gt; in our macro. kernel32 will always be the first DLL that we import from.&lt;/p&gt;
+
+&lt;p&gt;Before we move on to the snippet of code that searches our import table, lets consider why we used the &lt;code&gt;lea&lt;/code&gt; instruction for loading &lt;code&gt;__imp_tab_start&lt;/code&gt;. Why didn&amp;#39;t we just use &lt;code&gt;mov&lt;/code&gt;? It turns out that there&amp;#39;s a subtle gotcha of &lt;code&gt;mov&lt;/code&gt;ing absolute addresses in x64. What happens if our binary got loaded at an unexpected base address? What if we wanted to use this code with some modifications in a DLL? If we were to use &lt;code&gt;mov rbp, __imp_tab_start&lt;/code&gt; fasm would generate an opcode which loads the value of &lt;code&gt;__imp_tab_start&lt;/code&gt; computed from the preferred module load address. This would only be valid if we were loaded in a way we preferred every time. While this is somewhat rare for exe files, sometimes life isn&amp;#39;t fair and to deal with data loads like this in the face of different base addresses PE files can contain a &lt;code&gt;.reloc&lt;/code&gt; section. The data in this section is used by the Windows loader to patch up all instances of absolute addresses like this to be correct in the event of a different base address. However, we don&amp;#39;t like lots of sections because we&amp;#39;re trying to keep a low profile. The solution to this is to use &lt;code&gt;lea&lt;/code&gt; instead as fasm will always generate an opcode which will perform a &lt;a href=&quot;https://en.wikipedia.org/wiki/Addressing_mode#PC-relative_2&quot;&gt;RIP-relative&lt;/a&gt; address calculation which will compute the address of &lt;code&gt;__imp_tab_start&lt;/code&gt; as an offset from the current instruction pointer rather than an absolute address. This will always yield the correct address no matter where we&amp;#39;re loaded.&lt;/p&gt;
+
+&lt;p&gt;Using the excellent &lt;a href=&quot;https://x64dbg.com/&quot;&gt;x64dbg&lt;/a&gt; debugger, we can see how RIP-relative loads are encoded. The opcode that fasm generated for our &lt;code&gt;lea&lt;/code&gt; consists of the bytes in the screenshot below:&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;/img/relative.png&quot; alt=&quot;RIP-Relative instruction&quot;&gt;&lt;/p&gt;
+
+&lt;p&gt;x64dbg displays the table address that is loaded into &lt;code&gt;rbp&lt;/code&gt; as being &lt;code&gt;0x4010e8&lt;/code&gt;. Looking at the bytes of the opcode, we don&amp;#39;t see this constant in the instruction stream. Instead we see the 32 bit constant &lt;code&gt;0x000000d3&lt;/code&gt; which is part of the instruction opcode. How is our table address calculated? The answer is quite simple: &lt;code&gt;0x401015 + 0xd3 = 0x4010e8&lt;/code&gt; because &lt;code&gt;rip&lt;/code&gt; always points to the instruction that is after the one currently being executed. What about if we had used &lt;code&gt;mov&lt;/code&gt;?&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;/img/absolute.png&quot; alt=&quot;Absolute addressing&quot;&gt;&lt;/p&gt;
+
+&lt;p&gt;The difference is immediately obvious as the bytes as the address is absolutely encoded and now dependent on the module&amp;#39;s load address.&lt;/p&gt;
+
+&lt;p&gt;Finally, how did we figure out the offset of the import table when we dumped it in WinDbg above? &lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;&amp;gt; u $exentry ;* Unassemble a few instructions from the entry point
+import+0x1000:
+00000000`00401000 488b1c24        mov     rbx,qword ptr [rsp]
+00000000`00401004 6631db          xor     bx,bx
+00000000`00401007 4881eb00000100  sub     rbx,10000h
+00000000`0040100e 488d2dd3000000  lea     rbp,[import+0x10e8 (00000000`004010e8)]
+00000000`00401015 4883ec28        sub     rsp,28h
+00000000`00401019 8b433c          mov     eax,dword ptr [rbx+3Ch]
+00000000`0040101c 8b840388000000  mov     eax,dword ptr [rbx+rax+88h]
+00000000`00401023 4801d8          add     rax,rbx
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;We can see our &lt;code&gt;lea&lt;/code&gt; instruction and what the address to the first table entry is. However, we initialize kernel32&amp;#39;s &lt;code&gt;rbp&lt;/code&gt; to be the first entry of the table which contains the hash we want rather than before the skip-byte, string, and padding. If we wanted, we could modify the macro to not generate these to save a few bytes as they aren&amp;#39;t needed. To find the true starting address of the table we would need to subtract a few bytes from the number initially &lt;code&gt;lea&lt;/code&gt;&amp;#39;d into &lt;code&gt;rbp&lt;/code&gt;.&lt;/p&gt;
+
+&lt;h4&gt;Back into the fray&lt;/h4&gt;
+
+&lt;p&gt;Now let&amp;#39;s get back to comparing the hash of the current export with the hashes in our import table. To get to this portion of the code you should note that &lt;code&gt;eax&lt;/code&gt; would be zero due to the null byte of the current function export string causing the &lt;code&gt;jnz .djb2&lt;/code&gt; to fall through.&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-nasm&quot; data-lang=&quot;nasm&quot;&gt;    &lt;span class=&quot;c1&quot;&gt;; edx contains the computed hash of the current exported function name.&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; Load the import table base for the current module into rsi&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rsi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbp&lt;/span&gt;
+
+&lt;span class=&quot;c1&quot;&gt;; Iterate over every entry in the import table to see if edx is something we&amp;#39;re&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; interested in&lt;/span&gt;
+&lt;span class=&quot;nl&quot;&gt;.find_table_entry:&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; lodsq loads 8 bytes into rax from rsi and adds 8 to rsi (pointing to the next hash&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; in our import table). There is no need to zero rax because it&amp;#39;s already zero&amp;#39;d.&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; What do you think lodsd does?&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;lodsq&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; Have we hit the last entry of the import table for our current module?&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; If so that means that the hash in edx isn&amp;#39;t of any interest to us&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;test&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt; 
+    &lt;span class=&quot;nf&quot;&gt;jz&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;.next_export&lt;/span&gt;  &lt;span class=&quot;c1&quot;&gt;; Jump over populating the current import directory with edx&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; If we haven&amp;#39;t hit the last entry of our module&amp;#39;s import list, does the hash of&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; the current entry in our import table match the one in edx? &lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;cmp&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;edx&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;jne&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;.find_table_entry&lt;/span&gt;
+
+&lt;span class=&quot;c1&quot;&gt;; The current import table entry matches the hash in edx computed from our DLL&amp;#39;s &lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; export directory. We need to get the address of the function corresponding &lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; to the name of the current export string&lt;/span&gt;
+&lt;span class=&quot;nl&quot;&gt;.get_export_addr:&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; We don&amp;#39;t want any leftover junk in the upper bits of eax&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;xor&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; Get the index into AddressOfNameOrdinals from rcx which is the current&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; index into AddressOfNames. Note that AddressOfNameOrdinals is an array &lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; of 16 bit values&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;ax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;r15&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rcx&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; Get the RVA of the function we want to import from AddressOfFunctions&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; using the correct value from AddressOfNameOrdinals&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;r13&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;4&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; Turn the RVA into a VA. rax now contains the exact function pointer&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; we want to put into our table&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;add&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; The lodsq instruction over-incremented rsi by 8 after we loaded the &lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; hash of the import entry we want. That&amp;#39;s easy to fix by just&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; subtracting eight from rsi before we put the function address&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; in rax into the memory location. This populates the import table&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; entry with the qword function address and overwrites the uneeded hash.&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;rsi&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;8&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;],&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt;
+
+&lt;span class=&quot;c1&quot;&gt;; Go to next export&lt;/span&gt;
+&lt;span class=&quot;nl&quot;&gt;.next_export:&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; Increment the index into the array of exported function names&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;inc&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rcx&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; If we haven&amp;#39;t exceeded NumberOfNames then hash and compare the next&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; export&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;cmp&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rcx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;r12&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;jl&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;find_exports&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; If we dont jump back to find_exports we&amp;#39;ll fall through to load the next DLL in our&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; import table...&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;At this point our code will completely fill up our import table for kernel32 with the addresses of the requested exports. If the code falls through the &lt;code&gt;jl find_exports&lt;/code&gt; (because we&amp;#39;ve looked through every export in the current DLL) we have to check to see if there is another DLL that we need to import from and if so, load that DLL and switch &lt;code&gt;rbp&lt;/code&gt; to point to the correct table of hashes to search for/populate into.&lt;/p&gt;
+
+&lt;p&gt;When we encounter the string of a new DLL to import (such as &amp;quot;user32&amp;quot;) we will pass it to the &lt;a href=&quot;https://msdn.microsoft.com/en-us/library/windows/desktop/ms684175(v=vs.85).aspx&quot;&gt;LoadLibraryA&lt;/a&gt; function which takes a DLL string and will load it into our process&amp;#39; address space. Notice how we didn&amp;#39;t include the DLL file extension in our strings to make them a bit smaller. This is obviously optional and is because of the following quote:&lt;/p&gt;
+
+&lt;blockquote&gt;
+&lt;p&gt;If no file name extension is specified in the &lt;em&gt;lpFileName&lt;/em&gt; parameter, the default library extension .dll is appended. However, the file name string can include a trailing point character (.) to indicate that the module name has no extension. When no path is specified, the function searches for loaded modules whose base name matches the base name of the module to be loaded. If the name matches, the load succeeds. Otherwise, the function searches for the file.&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;Before we get to the code, we have to learn about the &lt;code&gt;sub rsp, 8*5&lt;/code&gt; instruction in &lt;code&gt;find_kernel32&lt;/code&gt;. Because we are going to be calling the &lt;code&gt;LoadLibraryA&lt;/code&gt; Windows API function in our import code, we have to follow the conventions of the Windows x64 ABI. This dictates that the stack be aligned to 16 byte boundaries. After  &lt;code&gt;KERNEL32!BaseThreadInitThunk&lt;/code&gt; calls our entry point, the stack is misaligned and subtracting this amount of bytes from the stack pointer will re-align the stack pointer to be a multiple of 16. If we didn&amp;#39;t align the stack then our call to &lt;code&gt;LoadLibraryA&lt;/code&gt; call would fail.&lt;/p&gt;
+
+&lt;p&gt;Because we load (if the module doesn&amp;#39;t exist in our address space already) DLLs with &lt;code&gt;LoadLibraryA&lt;/code&gt; it is necessary to include that import in the list of imports from kernel32. This is a requirement because we refer to the &lt;code&gt;LoadLibraryA&lt;/code&gt; label in the importing code itself so fasm has to know where the address to that function is. This also means that kernel32 needs to be the first DLL we import from in our series of invocations of the use macro. &lt;code&gt;LoadLibraryA&lt;/code&gt; is only invoked after the import entries for kenrel32 have been populated so this causes no issues. If we only wanted to import things from kernel32 then we wouldn&amp;#39;t need to use &lt;code&gt;LoadLibraryA&lt;/code&gt; in the first place. If we wanted we could have the use macro insert this hash into every kernel32 table.&lt;/p&gt;
+
+&lt;p&gt;Now let&amp;#39;s get to the final piece of code that we need to set up the importing process for the next DLL we want to import:&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-nasm&quot; data-lang=&quot;nasm&quot;&gt;    &lt;span class=&quot;c1&quot;&gt;; rcx big enough because size of # exports&lt;/span&gt;
+&lt;span class=&quot;nl&quot;&gt;next_dll:&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; Move the current import table base into rdi to use with the following&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; scasq instruction &lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rdi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbp&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; Zero rax as it&amp;#39;s used as the value to compare against for by scasq&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;xor&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; scasq will load a qword from the address in rdi and compare it to to &lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; the value in rax. rdi will be be incremented by 8. If the qword is &lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; equal to eax then the zero flag will be set. repnz will keep executing&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; the scasq instruction until a qword equal to rax (0) is found and the&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; zero flag is set (repeat while not zero)&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;;&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; This is why we defined the table terminator byte in our macro. We are&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; looping through all the fully imported import table entries (function&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; addresses) until we hit our terminator. This is so that we can switch&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; to the table of import hashes for the next DLL.&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;repnz&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;scasq&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; The final scasq incremented rdi over the qword table terminator for our previous &lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; import table. What does it point to now? It&amp;#39;s either one of two things: the &lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; byte before the ASCII name of the next DLL to import from, or a null byte.&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; Where did this null byte come from? The import_end macro we defined above.&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;;&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; We have to move the pointer in rdi that we used for scasq into rsi because we&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; want to use the lodsb instruction&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rsi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rdi&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; Loads al with the number of bytes to the first import table entry for the next&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; DLL and increments rsi over size byte OR loads al with zero signalling the &lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; end of our imports. Remember `db @f - $, dll, 0` defines the number of bytes&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; to jump forward to the first hash in our import table for this DLL&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;lodsb&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; Are we done importing (null terminator defined by import_end)?&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;test&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;al&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;al&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;jz&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;done_importing&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; We aren&amp;#39;t done importing so lets make the next table base pointer (rbp) &lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; equal to the current location in rsi added to the size byte that we loaded&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; into rax with lodsb. We put that size byte in there because it&amp;#39;s so easy to&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; jump over the name of the DLL we want to import. The DLL name could be&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; a large amount of characters and it takes up much less space to just have a&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; byte telling us how much to jump over to the first table entry than writing&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; instructions for scanning until the null byte of the DLL name string&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;lea&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbp&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;rsi&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;  &lt;span class=&quot;c1&quot;&gt;; rax contains size byte&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; rsi points to the ASCII DLL name we want to load because lodsb incremented&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; the pointer over the size byte. We are moving it into rcx because it&amp;#39;s the &lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; calling convention to place the first argument (in this case the only&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; argument) into rcx&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rcx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rsi&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; This is why we always need to include LoadLibraryA in our list of imports&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; to kernel32 -- we use it to load the rest of the DLLs from which we want&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; to import from. Then we just walk their headers to their export directory&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; just like we did with kernel32.dll. Now how we are calling the address&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; of the function stored in the LoadLibraryA import directory entry that we&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; just populated&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;call&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;LoadLibraryA&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; The loaded module base address is returned in rax so we want to move it into&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; rbx because we want to walk the headers in find_export_dir and compute VAs&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; from RVAs&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; Let&amp;#39;s do it all over again with the base address of the DLL we just loaded&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;jmp&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;find_export_dir&lt;/span&gt;
+
+&lt;span class=&quot;c1&quot;&gt;; Wow! We&amp;#39;re done importing everything. Now we can call main/start the real program&lt;/span&gt;
+&lt;span class=&quot;nl&quot;&gt;done_importing:&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; Do something interesting...&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;And that&amp;#39;s it! We will jump back to &lt;code&gt;find_export_dir&lt;/code&gt; and start the process all over again with another DLL. When we look for another DLL and hit the zero of &lt;code&gt;import_end&lt;/code&gt; we jump to &lt;code&gt;done_importing&lt;/code&gt; where we can start writing our actual code. When we want to call any of our imports then we just call through the import table address like &lt;code&gt;call [ImportFromDll]&lt;/code&gt; and everything will work if it the import is valid. The final code listing below contains a small example of using some imports from different DLLs.&lt;/p&gt;
+
+&lt;h2&gt;Wrapping up&lt;/h2&gt;
+
+&lt;p&gt;If you made it this far, congratulations! Building tiny binaries is a lot of fun and there are many other techniques that we can employ. Our importing code ended up being 171 bytes of machine code — not bad for doing everything it does.&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;&amp;gt; db $exentry L AB
+00000000`00401000  48 8b 1c 24 66 31 db 48-81 eb 00 00 01 00 48 8d  H..$f1.H......H.
+00000000`00401010  2d d3 00 00 00 48 83 ec-28 8b 43 3c 8b 84 03 88  -....H..(.C&amp;lt;....
+00000000`00401020  00 00 00 48 01 d8 44 8b-68 1c 44 8b 70 20 44 8b  ...H..D.h.D.p D.
+00000000`00401030  78 24 44 8b 60 18 49 01-dd 49 01 de 49 01 df 31  x$D.`.I..I..I..1
+00000000`00401040  c9 41 8b 34 8e 48 01 de-ba 05 15 00 00 89 d0 c1  .A.4.H..........
+00000000`00401050  e2 05 01 c2 31 c0 ac 01-c2 85 c0 75 f0 48 89 ee  ....1......u.H..
+00000000`00401060  48 ad 85 c0 74 17 39 d0-75 f6 31 c0 66 41 8b 04  H...t.9.u.1.fA..
+00000000`00401070  4f 41 8b 44 85 00 48 01-d8 48 89 46 f8 48 ff c1  OA.D..H..H.F.H..
+00000000`00401080  4c 39 e1 7c bc 48 89 ef-31 c0 f2 48 af 48 89 fe  L9.|.H..1..H.H..
+00000000`00401090  ac 84 c0 74 16 48 8d 6c-06 ff 48 89 f1 ff 15 55  ...t.H.l..H....U
+00000000`004010a0  00 00 00 48 89 c3 e9 6e-ff ff ff                 ...H...n...
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;There are definitely ways of optimizing for size to shave some bytes off in the code as well as how we lay out our data in the import table but this post has gone on for too long already.&lt;/p&gt;
+
+&lt;p&gt;Hope you enjoyed it! If you have any comments or suggestions I would love to hear from you.&lt;/p&gt;
+
+&lt;h3&gt;Assembly resources&lt;/h3&gt;
+
+&lt;ul&gt;
+&lt;li&gt;&lt;a href=&quot;https://pacman128.github.io/pcasm/&quot;&gt;Dr. Paul Carter&amp;#39;s PC Assembly Language&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&quot;http://www.lighterra.com/papers/modernmicroprocessors/&quot;&gt;Modern Microprocessors: A 90-Minute Guide&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&quot;Assembly%20Programming%20Journal&quot;&gt;Assembly Programming Journal&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&quot;http://www.agner.org/optimize/&quot;&gt;Agner Fog&amp;#39;s Software Optimization Resources&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&quot;https://www.swansontec.com/sregisters.html&quot;&gt;The Art of Picking Intel Registers&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&quot;http://www.codemachine.com/article_x64deepdive.html&quot;&gt;X64 Deep Dive&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&quot;https://www.amazon.com/dp/0977087859&quot;&gt;x86 Instruction Set Architecture&lt;/a&gt;
+
+&lt;ul&gt;
+&lt;li&gt;Extremely informative (and readable) book to get if you are serious about learning the x86 ISA quickly&lt;/li&gt;
+&lt;/ul&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&quot;https://www.amazon.com/dp/1931769222&quot;&gt;Hacker Disassembling Uncovered&lt;/a&gt;
+
+&lt;ul&gt;
+&lt;li&gt;The 1st and 2nd editions of this book are quite different. Kris Kaspersky (RIP) has released the the draft of the second edition for free.&lt;/li&gt;
+&lt;/ul&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&quot;Software%20Developer%20Manuals&quot;&gt;Intel Software Developer Manuals&lt;/a&gt;
+
+&lt;ul&gt;
+&lt;li&gt;The definitive reference&lt;/li&gt;
+&lt;li&gt;AMD&amp;#39;s manuals have better pictures :)&lt;/li&gt;
+&lt;/ul&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&quot;https://godbolt.org/&quot;&gt;Compiler Explorer&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&quot;https://flatassembler.net/download.php&quot;&gt;fasm source code&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3&gt;Final code&lt;/h3&gt;
+
+&lt;p&gt;You should now be able to understand the listing of the final code below:&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-nasm&quot; data-lang=&quot;nasm&quot;&gt;&lt;span class=&quot;nf&quot;&gt;format&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;PE64&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;GUI&lt;/span&gt;
+&lt;span class=&quot;nf&quot;&gt;entry&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;find_kernel32&lt;/span&gt;
+
+  &lt;span class=&quot;nl&quot;&gt;find_kernel32:&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.alloc_granularity&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;10000h&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; Obtain base of kernel32.dll in RBX&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;rsp&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;  &lt;span class=&quot;c1&quot;&gt;; return address to kernel32 loader function&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;xor&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;bx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;bx&lt;/span&gt;      &lt;span class=&quot;c1&quot;&gt;; align address to 64k boundaries (allocation granularity)&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;sub&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;.alloc_granularity&lt;/span&gt;
+
+    &lt;span class=&quot;nf&quot;&gt;lea&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbp&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;__imp_tab_start&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;sub&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rsp&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;8&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;5&lt;/span&gt;    &lt;span class=&quot;c1&quot;&gt;; reserve stack for API use and make stack dqword aligned&lt;/span&gt;
+
+  &lt;span class=&quot;nl&quot;&gt;find_export_dir:&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.e_lfanew&lt;/span&gt;   &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;3Ch&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.data_dir_0&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;88h&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; Obtain IMAGE_EXPORT_DIRECTORY address in RAX&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;.e_lfanew&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;.data_dir_0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;add&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt;
+
+
+  &lt;span class=&quot;nl&quot;&gt;read_export_dir:&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.export_names_num&lt;/span&gt;  &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;18h&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.export_funcs_addr&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;1Ch&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.export_names_addr&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;20h&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.export_ords_addr&lt;/span&gt;  &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;24h&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; Obtain info from IMAGE_EXPORT_DIRECTORY&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;r13d&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;.export_funcs_addr&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;c1&quot;&gt;; AddressOfFunctions&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;r14d&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;.export_names_addr&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;c1&quot;&gt;; AddressOfNames&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;r15d&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;.export_ords_addr&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;  &lt;span class=&quot;c1&quot;&gt;; AddressOfNameOrdinals&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;r12d&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;.export_names_num&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;  &lt;span class=&quot;c1&quot;&gt;; NumberOfNames&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;add&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;r13&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;add&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;r14&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;add&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;r15&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt;
+
+
+    &lt;span class=&quot;nf&quot;&gt;xor&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;ecx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;ecx&lt;/span&gt;
+  &lt;span class=&quot;nl&quot;&gt;find_exports:&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;esi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;r14&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rcx&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;4&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;    &lt;span class=&quot;c1&quot;&gt;; use RCX to index AddressOfNames getting cur func name RVA&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;add&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rsi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt;
+
+  &lt;span class=&quot;c1&quot;&gt;; hash export name to compare to imp tbl entry&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;edx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;5381&lt;/span&gt; &lt;span class=&quot;c1&quot;&gt;; edx contains hash&lt;/span&gt;
+  &lt;span class=&quot;nl&quot;&gt;.djb2:&lt;/span&gt;           
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;edx&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;shl&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;edx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;5&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;add&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;edx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;xor&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;lodsb&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;add&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;edx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;test&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;jnz&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;.djb2&lt;/span&gt;
+
+  &lt;span class=&quot;c1&quot;&gt;; locate imp table entry&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rsi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbp&lt;/span&gt;
+  &lt;span class=&quot;nl&quot;&gt;.find_table_entry:&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;lodsq&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;test&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;jz&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;.next_export&lt;/span&gt;        &lt;span class=&quot;c1&quot;&gt;; we have hit the table&amp;#39;s null terminator&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;cmp&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;edx&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;jne&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;.find_table_entry&lt;/span&gt;
+
+  &lt;span class=&quot;nl&quot;&gt;.get_export_addr:&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;xor&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;           &lt;span class=&quot;c1&quot;&gt;; not needed if eax is already 0&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;ax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;r15&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rcx&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;  &lt;span class=&quot;c1&quot;&gt;; get export&amp;#39;s index into AddressOfFunctions&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;r13&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;4&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;c1&quot;&gt;; get export address rva from AddressOfFunctions&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;add&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;rsi&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;8&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;],&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt;     &lt;span class=&quot;c1&quot;&gt;; populate imp table entry with address&lt;/span&gt;
+
+  &lt;span class=&quot;c1&quot;&gt;; go to next export&lt;/span&gt;
+  &lt;span class=&quot;nl&quot;&gt;.next_export:&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;inc&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rcx&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;cmp&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rcx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;r12&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;jl&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;find_exports&lt;/span&gt;
+
+    &lt;span class=&quot;c1&quot;&gt;; rcx big enough because size of # exports&lt;/span&gt;
+  &lt;span class=&quot;nl&quot;&gt;next_dll:&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rdi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbp&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;xor&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;repnz&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;scasq&lt;/span&gt;      &lt;span class=&quot;c1&quot;&gt;; find next dll table&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rsi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rdi&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;lodsb&lt;/span&gt;            &lt;span class=&quot;c1&quot;&gt;; increments rsi over size byte &lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;test&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;al&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;al&lt;/span&gt;      &lt;span class=&quot;c1&quot;&gt;; the increment is why `cmp byte [rdi], 0` (3 bytes too) isnt used&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;jz&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;done_importing&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;lea&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbp&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;rsi&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;  &lt;span class=&quot;c1&quot;&gt;; rax contains size byte&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rcx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rsi&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;call&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;LoadLibraryA&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;jmp&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;find_export_dir&lt;/span&gt;
+
+
+  &lt;span class=&quot;nl&quot;&gt;done_importing:&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; call main&lt;/span&gt;
+
+    &lt;span class=&quot;nf&quot;&gt;xor&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;r9d&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;r9d&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;lea&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;r8&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;_msg&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;lea&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rdx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;_msg&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;xor&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;ecx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;ecx&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;call&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;MessageBoxA&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;
+
+    &lt;span class=&quot;nf&quot;&gt;xor&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;ecx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;ecx&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;call&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;ExitProcess&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;
+
+  &lt;span class=&quot;c1&quot;&gt;; ---------------------------------------------------&lt;/span&gt;
+  &lt;span class=&quot;nf&quot;&gt;_msg&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;db&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&amp;#39;hello tiny world!&amp;#39;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
+  &lt;span class=&quot;c1&quot;&gt;; ---------------------------------------------------&lt;/span&gt;
+
+  &lt;span class=&quot;nf&quot;&gt;macro&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;import_start&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;{}&lt;/span&gt;
+  &lt;span class=&quot;nf&quot;&gt;macro&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;import_end&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;dd&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;}&lt;/span&gt;
+
+  &lt;span class=&quot;nf&quot;&gt;macro&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;use&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;dl&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;l&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;imp_name&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;{&lt;/span&gt;
+      &lt;span class=&quot;k&quot;&gt;common&lt;/span&gt;
+        &lt;span class=&quot;nf&quot;&gt;imp_num&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
+
+        &lt;span class=&quot;kd&quot;&gt;db&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;f&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&lt;/span&gt; &lt;span class=&quot;kc&quot;&gt;$&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;dl&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;l&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;align&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;8&lt;/span&gt;
+        &lt;span class=&quot;err&quot;&gt;@@:&lt;/span&gt;
+
+      &lt;span class=&quot;nf&quot;&gt;forward&lt;/span&gt;
+          &lt;span class=&quot;nf&quot;&gt;local&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;imp&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;imp_len&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;h&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;c&lt;/span&gt;
+          &lt;span class=&quot;nf&quot;&gt;virtual&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;at&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
+              &lt;span class=&quot;nl&quot;&gt;imp:&lt;/span&gt;&lt;span class=&quot;err&quot;&gt;:&lt;/span&gt;
+                  &lt;span class=&quot;kd&quot;&gt;db&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;`&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;imp_name&lt;/span&gt;
+                  &lt;span class=&quot;kd&quot;&gt;db&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
+              &lt;span class=&quot;nf&quot;&gt;imp_len&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;kc&quot;&gt;$&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;
+          &lt;span class=&quot;nf&quot;&gt;end&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;virtual&lt;/span&gt;
+
+          &lt;span class=&quot;c1&quot;&gt;; hash using djb2&lt;/span&gt;
+          &lt;span class=&quot;nf&quot;&gt;i&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
+          &lt;span class=&quot;nf&quot;&gt;h&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;5381&lt;/span&gt;
+          &lt;span class=&quot;nf&quot;&gt;while&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;i&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;imp_len&lt;/span&gt;
+              &lt;span class=&quot;nf&quot;&gt;load&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;c&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;byte&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;from&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;imp&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;i&lt;/span&gt;
+              &lt;span class=&quot;nf&quot;&gt;h&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;((&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;h&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;shl&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;5&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;h&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;c&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;mod&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;0x100000000&lt;/span&gt;
+              &lt;span class=&quot;nf&quot;&gt;i&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;i&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;
+          &lt;span class=&quot;nf&quot;&gt;end&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;while&lt;/span&gt;
+
+          &lt;span class=&quot;nf&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;dl&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;l&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;eq&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&amp;#39;kernel32&amp;#39;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;imp_num&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
+            &lt;span class=&quot;err&quot;&gt;#&lt;/span&gt;&lt;span class=&quot;nl&quot;&gt;__imp_tab_start:&lt;/span&gt;
+          &lt;span class=&quot;nf&quot;&gt;end&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;if&lt;/span&gt;
+
+          &lt;span class=&quot;nf&quot;&gt;label&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;imp_name&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;qword&lt;/span&gt;
+            &lt;span class=&quot;kd&quot;&gt;dd&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;h&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
+
+          &lt;span class=&quot;nf&quot;&gt;imp_num&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;imp_num&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;
+      &lt;span class=&quot;k&quot;&gt;common&lt;/span&gt;
+          &lt;span class=&quot;kd&quot;&gt;dq&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;  &lt;span class=&quot;c1&quot;&gt;; terminate table entry&lt;/span&gt;
+  &lt;span class=&quot;err&quot;&gt;}&lt;/span&gt;
+
+  &lt;span class=&quot;c1&quot;&gt;; 115 bytes table, 172 bytes import asm&lt;/span&gt;
+  &lt;span class=&quot;c1&quot;&gt;; equivalent default imp table is 358 bytes saving 71 bytes already&lt;/span&gt;
+  &lt;span class=&quot;k&quot;&gt;import&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;_start&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;use&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&amp;#39;kernel32&amp;#39;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;&lt;span class=&quot;err&quot;&gt;\&lt;/span&gt;
+      &lt;span class=&quot;nf&quot;&gt;AcquireSRWLockExclusive&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;&lt;span class=&quot;err&quot;&gt;\&lt;/span&gt;
+      &lt;span class=&quot;nf&quot;&gt;GetProcessAffinityMask&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;&lt;span class=&quot;err&quot;&gt;\&lt;/span&gt;
+      &lt;span class=&quot;nf&quot;&gt;LoadLibraryA&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;&lt;span class=&quot;err&quot;&gt;\&lt;/span&gt;
+      &lt;span class=&quot;nf&quot;&gt;GetProcAddress&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;&lt;span class=&quot;err&quot;&gt;\&lt;/span&gt;
+      &lt;span class=&quot;nf&quot;&gt;ExitProcess&lt;/span&gt;
+
+    &lt;span class=&quot;nf&quot;&gt;use&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&amp;#39;user32&amp;#39;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;&lt;span class=&quot;err&quot;&gt;\&lt;/span&gt;
+      &lt;span class=&quot;nf&quot;&gt;DispatchMessageA&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;&lt;span class=&quot;err&quot;&gt;\&lt;/span&gt;
+      &lt;span class=&quot;nf&quot;&gt;MessageBoxA&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;&lt;span class=&quot;err&quot;&gt;\&lt;/span&gt;
+      &lt;span class=&quot;nf&quot;&gt;DestroyWindow&lt;/span&gt;
+  &lt;span class=&quot;k&quot;&gt;import&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;_end&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;</description>
+        <pubDate>Mon, 04 Dec 2017 00:00:00 -0800</pubDate>
+        <link>http://localhost:4000/2017/12/04/import-by-hash/</link>
+        <guid isPermaLink="true">http://localhost:4000/2017/12/04/import-by-hash/</guid>
+        
+        <category>assembly</category>
+        
+        <category>Windows</category>
+        
+        
+      </item>
+    
+  </channel>
+</rss>
