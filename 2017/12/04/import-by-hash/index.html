@@ -49,7 +49,7 @@
 
 <p><img src="/img/table.png" alt="Hash-based import table"></p>
 
-<p>The above table shows three hypothetical entries for functions in kernel32.dll. Each function that we want to import will be initially represented by eight bytes where the first four bytes will be the hash of the ASCII function name and the rest will be filler bytes. After searching through the export table of the correct DLL and matching one of the hashes in our import table, we will populate the entire eight byte entry with the virtual address of the function. All calls to the imported function will be made through the function pointer stored in our table. The default import table is produced by compilers and assemblers is similar to ours in function but is much larger as it the functions to import are stored as ASCII strings (among other requirements).</p>
+<p>The above table shows three hypothetical entries for functions in kernel32.dll. Each function that we want to import will be initially represented by eight bytes where the first four bytes will be the hash of the ASCII function name and the rest will be filler bytes. After searching through the export table of the correct DLL and matching one of the hashes in our import table, we will populate the entire eight byte entry with the virtual address of the function. All calls to the imported function will be made through the function pointer stored in our table. The default import table that is produced by compilers and assemblers is similar to ours in function but is much larger as the functions to import are stored as ASCII strings (among other requirements).</p>
 
 <p>The code samples are heavily commented and written with people who don&#39;t have a lot of experience with Windows or assembly language in mind. This could help you or could annoy you. If you fall into the latter category the full code is produced at the end of the post and isn&#39;t verbosely annotated. Additionally, the WinDbg examples should be understandable even if you&#39;ve never used the debugger before as each command is annotated. I have minimally stripped some output to make things more clear.</p>
 
@@ -63,7 +63,7 @@
 
 <p>In this diagram, only the parts of the headers that we will be focusing on are shown. This doesn&#39;t show the section headers which describe locations and metadata about each section, the sub-structures that are contained within the PE header, and more. We are primarily interested in the export directory of a DLL as it contains all the references to functions within the code section(s) of the DLL that we want to search for.</p>
 
-<p>All data references (pointers) in the PE headers are stored as *RVA*s or Relative Virtual Addresses. RVAs are offsets from the beginning of the file (and in rare cases from the beginning of a section but you don&#39;t have to worry about those). Pointers are stored this way because PE files can be loaded/relocated at different places in memory and the headers can&#39;t assume a preferred base address. To find the address in our address space of an RVA in a DLL we have to have a pointer to the base address of the module that we add to the RVA. Data references in headers stored as RVAs will always be correct no matter where the module is loaded in memory as long as they are added to the correct base address. If our DLL is mapped into memory beginning at <code>0x400000</code> and a field in our module&#39;s header refers to a piece of data at RVA <code>0xFFF</code> then the data is located at <code>0x400000 + 0xFFF = 0x0x400FFF</code> in our address space. </p>
+<p>All data references (pointers) in the PE headers are stored as *RVA*s or Relative Virtual Addresses. RVAs are offsets from the beginning of the file (and in rare cases in object files, from the beginning of a section but you don&#39;t have to worry about those). Pointers are stored this way because PE files can be loaded/relocated at different places in memory and the headers can&#39;t assume a preferred base address. To find the address in our address space of an RVA in a DLL we have to have a pointer to the base address of the module that we add to the RVA. Data references in headers stored as RVAs will always be correct no matter where the module is loaded in memory as long as they are added to the correct base address. If our DLL is mapped into memory beginning at <code>0x400000</code> and a field in our module&#39;s header refers to a piece of data at RVA <code>0xFFF</code> then the data is located at <code>0x400000 + 0xFFF = 0x0x400FFF</code> in our address space. A <code>.reloc</code> section could be used as well but the PE header should be valid without <code>.reloc</code>, hence the need for RVAs.</p>
 
 <h3>Creating a PE file in fasm</h3>
 
@@ -71,7 +71,7 @@
 <div class="highlight"><pre><code class="language-nasm" data-lang="nasm"><span class="nf">format</span> <span class="nv">PE64</span> <span class="nv">GUI</span>
 <span class="nf">entry</span> <span class="nv">find_kernel32</span>
 </code></pre></div>
-<p>The last thing to note is that we won&#39;t be explicitly specifying any sections in our binary. This causes fasm to create a single section named <code>.flat</code> which has read, write, and execute permissions where all code and data is placed. Since we want to produce small binaries, this eliminates padding bytes that are inserted between multiple sections for purposes of alignment. However, be warned that binaries with sections that are writeable and executable can sometimes set off antivirus software.</p>
+<p>The last thing to note is that we won&#39;t be explicitly specifying any sections in our binary. This causes fasm to create a single section named <code>.flat</code> which has read, write, and execute permissions where all code and data is placed. Since we want to produce small binaries, this eliminates padding bytes that are inserted between multiple sections for purposes of alignment. However, be warned that binaries with sections that are both writeable and executable can sometimes set off antivirus software.</p>
 
 <p>Now that that&#39;s out of the way we can start writing code!</p>
 
@@ -83,9 +83,9 @@
 
 <p><img src="/img/vmmap.png" alt="Virtual memory map"></p>
 
-<p>What this means means is that if we have any pointer inside kernel32.dll we can align that pointer to 64K boundaries and check for the byte signature of the beginning of the DOS header of the DLL (<code>4d 5a</code> which are the ASCII characters <code>MZ</code>... you&#39;ll see these bytes later). If it isn&#39;t found, check for the signature at each previous multiple of 64K until the it is located. It also just so happens that we can find a suitable pointer off of the top of the stack because the return address of the function which calls your binary&#39;s entry point is <code>BaseThreadInitThunk</code> located within kernel32.dll.</p>
+<p>What this means means is that if we have any pointer inside kernel32.dll we can align that pointer to 64K boundaries and check for the byte signature of the beginning of the DOS header of the DLL (<code>4d 5a</code> which are the ASCII characters <code>MZ</code>... you&#39;ll see these bytes later). If it isn&#39;t found, check for the signature at each previous multiple of 64K until it is located. It also just so happens that we can find a suitable pointer off of the top of the stack because the return address of the function which calls your binary&#39;s entry point is <code>BaseThreadInitThunk</code> located within kernel32.dll.</p>
 
-<p>The machine code for <code>KERNEL32!BaseThreadInitThunk</code> is (in all versions of Windows since 7 and probably XP) placed by the linker used to link kernel32.dll at an offset in the file that ends up being loaded at an offset between 64K and 128K bytes from the start of the base address in memory. This means that we don&#39;t necessarily need to iterate backwards checking every multiple of 64k as we know exactly which particular region our pointer falls under. This does depend on the particular build of kernel32.dll but has shown to be effective for many versions of Windows. We&#39;re having fun, not writing bullet-proof production code. We can see how this makes sense in the VMMap screenshot as the <code>.text</code> section (which is the typical name for code sections and contains <code>BaseThreadInitThunk</code>) is adjacent to the header of kernel32.dll. The easiest way to align a pointer to 64K is to zero out the bottom two bytes of the address it points to. Let&#39;s inspect the environment that is set up for us right before our entry point called in WinDbg:</p>
+<p>The machine code for <code>KERNEL32!BaseThreadInitThunk</code> is (in all versions of Windows since 7 and probably XP) placed by the linker used to link kernel32.dll at an offset in the file that ends up being loaded at an offset between 64K and 128K bytes from the start of the module base address in memory. This means that we don&#39;t necessarily need to iterate backwards checking every multiple of 64k as we know exactly which particular region our pointer falls under. This does depend on the particular build of kernel32.dll but has shown to be effective for many versions of Windows. We&#39;re having fun, not writing bullet-proof production code. We can see how this makes sense in the VMMap screenshot as the <code>.text</code> section (which is the typical name for code sections and contains <code>BaseThreadInitThunk</code>) is adjacent to the header of kernel32.dll. The easiest way to align a pointer to 64K is to zero out the bottom two bytes of the address it points to. Let&#39;s inspect the environment that is set up for us right before our entry point called in WinDbg:</p>
 <div class="highlight"><pre><code class="language-text" data-lang="text">(3fac.10dc): Break instruction exception - code 80000003 (first chance)
 ntdll!LdrpDoDebuggerBreak+0x30:
 00007ffb`2a802e9c cc              int     3
@@ -288,7 +288,7 @@ ole32!IMAGE_EXPORT_DIRECTORY
 
 <p>This diagram is a bit misleading in that the ASCII function names are from kernel32.dll but refer to ordinals that aren&#39;t actually what they are in the real DLL. Hopefully the structure of the arrays is now clear. A feature of the export table that we will not be supporting is <a href="https://blogs.msdn.microsoft.com/oldnewthing/20060719-24/?p=30473">export forwarding</a>.</p>
 
-<p>Now that we have our desired fields and their offsets we can write a few instructions to parse out the data into registers that we&#39;ll use in the remaining sections of the importer:</p>
+<p>Now that we have our desired fields and their offsets, we can write a few instructions to parse out the data into registers that we&#39;ll use in the remaining sections of the importer:</p>
 <div class="highlight"><pre><code class="language-nasm" data-lang="nasm"><span class="c1">; rax contains the virtual address of IMAGE_EXPORT_DIRECTORY</span>
 <span class="nl">read_export_dir:</span>
     <span class="nf">.export_names_num</span>  <span class="err">=</span> <span class="mh">18h</span>
@@ -334,8 +334,8 @@ ole32!IMAGE_EXPORT_DIRECTORY
 <span class="c1">; to store the ASCII string name of the DLL. This string is going to be bound to the first </span>
 <span class="c1">; argument of use simply called dll. The rest of the arguments are the list of functions</span>
 <span class="c1">; we want to import from the DLL and are a part of the [imp_name] list. Invoking macro in</span>
-<span class="c1">; fasm is done by just using it&#39;s name. It&#39;s argument list will be everything up to the </span>
-<span class="c1">; newline.</span>
+<span class="c1">; fasm is done by simply using it&#39;s name. Its argument list will be everything up to the </span>
+<span class="c1">; first non-escaped newline.</span>
 
 <span class="nf">macro</span> <span class="nv">use</span> <span class="nb">dl</span><span class="nv">l</span><span class="p">,</span> <span class="p">[</span><span class="nv">imp_name</span><span class="p">]</span> <span class="err">{</span>
     <span class="c1">; For every invocation of use, common blocks will only be evaluated a single </span>
@@ -357,12 +357,12 @@ ole32!IMAGE_EXPORT_DIRECTORY
         <span class="c1">; string to db (such as the one in dll) it will define the ASCII string</span>
         <span class="c1">; bytes sequentially. After that we immediately define a null byte to</span>
         <span class="c1">; terminate the DLL string. The align directive will continue to insert</span>
-        <span class="c1">; padding bytes at the current location until the offset is a mulitple of</span>
+        <span class="c1">; padding bytes at the current location until the offset is a multiple of</span>
         <span class="c1">; the number you pass to it. Therefore the @@: label will refer to a file</span>
         <span class="c1">; offset that is a multiple of 8 bytes. This will be important later.</span>
         <span class="c1">;</span>
         <span class="c1">; After all of that, we can understand the purpose of `@f - $`: it</span>
-        <span class="c1">; defines a byte whos value is the size of the DLL string including </span>
+        <span class="c1">; defines a byte whose value is the size of the DLL string including </span>
         <span class="c1">; the null byte and the padding bytes that are used to align whatever </span>
         <span class="c1">; the next data definition is. This is used by the import code to jump</span>
         <span class="c1">; over the file name and alignment bytes to the first entry of the table.</span>
@@ -407,7 +407,7 @@ ole32!IMAGE_EXPORT_DIRECTORY
         <span class="nf">i</span> <span class="err">=</span> <span class="mi">0</span>
         <span class="nf">h</span> <span class="err">=</span> <span class="mi">5381</span>
         <span class="nf">while</span> <span class="nv">i</span> <span class="o">&lt;</span><span class="err">=</span> <span class="nv">imp_len</span>
-            <span class="c1">; Load the next byte out of our virtual block</span>
+            <span class="c1">; Load the i&#39;th byte out of our virtual block into c</span>
             <span class="nf">load</span> <span class="nv">c</span> <span class="kt">byte</span> <span class="nv">from</span> <span class="nv">imp</span><span class="p">:</span><span class="nv">i</span>
 
             <span class="c1">; This hashing algorithm purposefully overflows a 4 byte integer.</span>
@@ -417,7 +417,7 @@ ole32!IMAGE_EXPORT_DIRECTORY
             <span class="nf">i</span> <span class="err">=</span> <span class="nv">i</span> <span class="o">+</span> <span class="mi">1</span>
         <span class="nf">end</span> <span class="nv">while</span>
 
-        <span class="c1">; We will always import from kernel32.dll first so it will always be</span>
+        <span class="c1">; We will always import from kernel32.dll first so it needs to always be</span>
         <span class="c1">; the first DLL in our import table. Additionally, if the current </span>
         <span class="c1">; import entry number is 0 then we are at the start of the table.</span>
         <span class="c1">; `#__imp_tab_start` defines a global label which refers to this first</span>
@@ -432,7 +432,7 @@ ole32!IMAGE_EXPORT_DIRECTORY
         <span class="c1">; label will fall on an 8 byte boundary as well.</span>
         <span class="c1">;</span>
         <span class="c1">; The following label definition will create a program-global label that can </span>
-        <span class="c1">; be used to refer to the current import table entry. After our function</span>
+        <span class="c1">; be used to refer to the current import table entry. After our found function</span>
         <span class="c1">; address has been filled into our current entry, this label with a name of</span>
         <span class="c1">; imp_name will be used to refer to the function pointer of the import that</span>
         <span class="c1">; we will call through. For example, if we imported ExitProcess, a global</span>
@@ -443,7 +443,7 @@ ole32!IMAGE_EXPORT_DIRECTORY
         <span class="c1">; every time we want to use the label.</span>
         <span class="nf">label</span> <span class="nv">imp_name</span><span class="p">:</span><span class="kt">qword</span>
 
-        <span class="c1">; Since h is the computed hash of the importd function we will define it as</span>
+        <span class="c1">; Since h is the computed hash of the imported function we will define it as</span>
         <span class="c1">; a 4 byte value (dd stands for define dword) followed by a zero. Both of</span>
         <span class="c1">; these dwords combined are 8 bytes in size (a qword). After the hash of the</span>
         <span class="c1">; function is found by the import code and then the corresponding entry is</span>
@@ -471,7 +471,7 @@ ole32!IMAGE_EXPORT_DIRECTORY
 <span class="nf">macro</span> <span class="nv">import_end</span> <span class="err">{</span> <span class="nv">dd</span> <span class="mi">0</span> <span class="err">}</span>
 
 <span class="c1">; This doesn&#39;t do anything but if we need an import_end, then we should make our</span>
-<span class="c1">; importing syntax look nice by having an import_start :)</span>
+<span class="c1">; importing syntax look nice by having an import_start in our DSL :)</span>
 <span class="nf">macro</span> <span class="nv">import_start</span> <span class="err">{}</span>
 </code></pre></div>
 <p>Is <a href="https://en.wikipedia.org/wiki/Data_structure_alignment">alignment</a> all that important on modern hardware? It used to be. We could certainly shave some bytes off our table if we didn&#39;t care about aligning the entries. Some people say that <a href="https://lemire.me/blog/2012/05/31/data-alignment-for-speed-myth-or-reality/">modern processors don&#39;t care most of the time</a>. Whatever the reality of the situation is, it&#39;s good practice to align your data. We want to be on our best manners if the function addresses contained in the entries are going to be frequently called through. If you want to know more about alignment in C then check out <a href="http://www.catb.org/esr/structure-packing/">this page</a> by ESR.</p>
@@ -502,7 +502,7 @@ import_end
 00000000`0040112e  00 00 67 ef 07 a5 00 00-00 00 00 00 00 00 00 00  ..g.............
 00000000`0040113e  00 00 00 00 00 00    
 </code></pre></div>
-<p>The purpose of the size byte we calculated with <code>@f - $</code> becomes a bit more clear: if you go <code>0x0a</code> bytes ahead of <code>00000000`004010de</code> the address we get is <code>00000000`004010e8</code> which is clearly divisible by 8 and aligned. Looking at that address in the dump we can see the byte string <code>0c bf e7 b7</code> which is the little-endian ordered bytes of the hash of the first import in our kernel32 table — <code>AcquireSRWLockExclusive</code>. After the dword hash there are four bytes of zeros before the next export&#39;s hash. When the 8 byte virtual address of <code>AcquireSRWLockExclusive</code> is located from the export directory of kernel32.dll, it is stored into <code>00000000`004010e8</code> and overwrites the bytes of the hash as well as the four bytes of zeros we defined. The global label that our macro defined for programmers to use to refer to the imported function is going to point to <code>00000000`004010e8</code>. After the 4 bytes of zeros, we see the next hash corresponding to <code>GetProcessAffinityMask</code>. If we keep going through all of our imports we will see that they are all defined in this way and all aligned to qword boundaries. How do we signal the end of the imports for kernel32? Look at address <code>00000000`00401110</code> which is right after the qword entry associated with <code>ExitProcess</code>. It&#39;s 8 bytes of zeros signaling that there are no more imports for the kernel32 module. Our importing code will check to see if we have a hash that is zero and if so, will stop looking for imports associated with the kernel32 module. Immediately after this null entry we can see the size byte of the user32 import table. The final piece of the puzzle is located at <code>00000000`0040113c</code> which is immediately after the terminating qword of the user32 table and is the 0 dword defined by <code>import_end</code> This will be used to stop importing altogether if it is found and will cause the main body of the code to be jumped to as the importing process is finished. We&#39;ll see the code for parsing this table shortly.</p>
+<p>The purpose of the size byte we calculated with <code>@f - $</code> becomes a bit more clear: if you go <code>0x0a</code> bytes ahead of <code>00000000`004010de</code> the address we get is <code>00000000`004010e8</code> which is clearly divisible by 8 and aligned. Looking at that address in the dump we can see the byte string <code>0c bf e7 b7</code> which is the little-endian ordered dword of the hash of the first import in our kernel32 table — <code>AcquireSRWLockExclusive</code>. After the dword hash there are four bytes of zeros before the next export&#39;s hash. When the 8 byte virtual address of <code>AcquireSRWLockExclusive</code> is located from the export directory of kernel32.dll, it is stored into <code>00000000`004010e8</code> and overwrites the bytes of the hash as well as the four bytes of zeros we defined. The global label that our macro defined for programmers to use to refer to the imported function is going to point to <code>00000000`004010e8</code>. After the 4 bytes of zeros, we see the next hash corresponding to <code>GetProcessAffinityMask</code>. If we keep going through all of our imports we will see that they are all defined in this way and all aligned to qword boundaries. How do we signal the end of the imports for kernel32? Look at address <code>00000000`00401110</code> which is right after the qword entry associated with <code>ExitProcess</code>. It&#39;s 8 bytes of zeros signaling that there are no more imports for the kernel32 module. Our importing code will check to see if we have a hash that is zero and if so, will stop looking for imports associated with the kernel32 module. Immediately after this null entry we can see the size byte of the user32 import table. The final piece of the puzzle is located at <code>00000000`0040113c</code> which is immediately after the terminating qword of the user32 table and is the 0 dword defined by <code>import_end</code> This will be used to stop importing altogether if it is found and will cause the main body of the code to be jumped to as the importing process is finished. We&#39;ll see the code for parsing this table shortly.</p>
 
 <h3>Populate our import directory</h3>
 
@@ -572,13 +572,14 @@ import_end
     <span class="c1">; export string in the export directory</span>
 
     <span class="c1">; edx contains our hash as its being computed (initialized with 5381)</span>
+    <span class="c1">; You can think of this constant sort of in the same way as a CRC polynomial</span>
     <span class="nf">mov</span> <span class="nb">edx</span><span class="p">,</span> <span class="mi">5381</span>
 <span class="nl">.djb2:</span>           
     <span class="nf">mov</span> <span class="nb">eax</span><span class="p">,</span> <span class="nb">edx</span>  <span class="c1">; eax = hash before shl (shift left)</span>
     <span class="nf">shl</span> <span class="nb">edx</span><span class="p">,</span> <span class="mi">5</span>    <span class="c1">; hash * 32 (2^5 = 32)</span>
     <span class="nf">add</span> <span class="nb">edx</span><span class="p">,</span> <span class="nb">eax</span>  <span class="c1">; hash * 32 + hash = hash * 33</span>
 
-    <span class="c1">; clear out the now-junk bytes in eax before loadsb</span>
+    <span class="c1">; clear out the now-junk bytes in eax before lodsb</span>
     <span class="c1">; ... you&#39;ll see why in a second</span>
     <span class="nf">xor</span> <span class="nb">eax</span><span class="p">,</span> <span class="nb">eax</span>
 
@@ -609,13 +610,13 @@ import_end
 </code></pre></div>
 <p>Notice that we use the <code>lodsb</code> instruction to load string bytes from <code>rsi</code>. This instruction is part of a set collectively known as &quot;string instructions&quot; which make it easier to iterate over ranges of bytes. While they might not always be as fast as equivalent sequences of instructions which load bytes and increment pointers manually (this is because they are <a href="https://en.wikipedia.org/wiki/Microcode">microcoded</a>), their opcodes don&#39;t take up a lot of space. In this case the opcode for <code>lodsb</code> only takes up a single byte. Writing your code around using conventional registers like <code>rsi</code> in this way can add up to a sizeable amount of saved bytes!</p>
 
-<p>Now that our hash function is implemented the only other thing to consider is hash collisions between imports. This could happen but as we&#39;ll see later, the collision would need to happen between names of exported functions located within the <em>same</em> DLL. This should be unlikely enough for our purposes. If someone is going to be using this method of importing it wouldn&#39;t be too much to ask to mess around with the hashing algorithm or add more data to the hash like the name of the DLL itself to eliminate the collision should one arise.</p>
+<p>Now that our hash function is implemented, the only other thing to consider is hash collisions between imports. This could happen but as we&#39;ll see later, the collision would need to happen between names of exported functions located within the <em>same</em> DLL. This should be unlikely enough for our purposes. If someone is going to be using this method of importing it wouldn&#39;t be too much to ask to mess around with the hashing algorithm or add more data to the hash like the name of the DLL itself to eliminate the collision should one arise.</p>
 
 <h4>Quick aside</h4>
 
-<p>We have the hash in <code>edx</code> so now we need to compare it with the list of hashes of functions we want to import in our import table. However, how do we know where our import table is located? Remember those instructions at the bottom of the <code>find_kernel32</code> snippet I said to temporarily ignore? Specifically <code>lea rbp, [__imp_tab_start]</code> (we will cover the other instruction later). This loads the start of the import table into <code>rbp</code> (the <em>base pointer</em> register points to the <em>base</em> of our import table) right before <code>find_export_dir</code>. As we&#39;ll see, after we are done importing everything we want from kernel32.dll we will jump back to <code>find_export_dir</code>  with the base address of a new DLL in <code>rbx</code> as well as  <code>rbp</code> pointing to the next correct table and start the importing process all over again. To kick off the first iteration though, we have to initialize <code>rbp</code> to the import table entries for kernel32.dll. That is why we defined <code>__imp_tab_start</code> in our macro. kernel32 will always be the first DLL that we import from.</p>
+<p>We have the hash in <code>edx</code> so now we need to compare it with the list of hashes of functions we want to import in our import table. However, how do we know where our import table is located? Remember those instructions at the bottom of the <code>find_kernel32</code> snippet I said to temporarily ignore? Specifically <code>lea rbp, [__imp_tab_start]</code> (we will cover the other instruction later). This loads the start of the import table into <code>rbp</code> (the <em>base pointer</em> register points to the <em>base</em> of our import table) right before <code>find_export_dir</code>. As we&#39;ll see, after we are done importing, everything we want from kernel32.dll we will jump back to <code>find_export_dir</code> with the base address of a new DLL in <code>rbx</code> as well as  <code>rbp</code> pointing to the next correct table and start the importing process all over again. To kick off the first iteration though, we have to initialize <code>rbp</code> to the import table entries for kernel32.dll. That is why we defined <code>__imp_tab_start</code> in our macro. kernel32 will always be the first DLL that we import from.</p>
 
-<p>Before we move on to the snippet of code that searches our import table, lets consider why we used the <code>lea</code> instruction for loading <code>__imp_tab_start</code>. Why didn&#39;t we just use <code>mov</code>? It turns out that there&#39;s a subtle gotcha of <code>mov</code>ing absolute addresses in x64. What happens if our binary got loaded at an unexpected base address? What if we wanted to use this code with some modifications in a DLL? If we were to use <code>mov rbp, __imp_tab_start</code> fasm would generate an opcode which loads the value of <code>__imp_tab_start</code> computed from the preferred module load address. This would only be valid if we were loaded in a way we preferred every time. While this is somewhat rare for exe files, sometimes life isn&#39;t fair and to deal with data loads like this in the face of different base addresses PE files can contain a <code>.reloc</code> section. The data in this section is used by the Windows loader to patch up all instances of absolute addresses like this to be correct in the event of a different base address. However, we don&#39;t like lots of sections because we&#39;re trying to keep a low profile. The solution to this is to use <code>lea</code> instead as fasm will always generate an opcode which will perform a <a href="https://en.wikipedia.org/wiki/Addressing_mode#PC-relative_2">RIP-relative</a> address calculation which will compute the address of <code>__imp_tab_start</code> as an offset from the current instruction pointer rather than an absolute address. This will always yield the correct address no matter where we&#39;re loaded.</p>
+<p>Before we move on to the snippet of code that searches our import table, lets consider why we used the <code>lea</code> instruction for loading <code>__imp_tab_start</code>. Why didn&#39;t we just use <code>mov</code>? It turns out that there&#39;s a subtle gotcha of <code>mov</code>ing absolute addresses in x64. What happens if our binary got loaded at an unexpected base address? What if we wanted to use this code with some modifications in a DLL? If we were to use <code>mov rbp, __imp_tab_start</code> fasm would generate an opcode which loads the value of <code>__imp_tab_start</code> computed from the preferred module load address. This would only be valid if we were loaded in a way we preferred every time. While this is somewhat rare for exe files, sometimes life isn&#39;t fair and to deal with data loads like this in the face of different base addresses PE files can contain a <code>.reloc</code> section. The data in this section is used by the Windows loader to patch up all instances of absolute addresses like this to be correct in the event of a different base address (using one of the obscure relocation entry types). However, we don&#39;t like lots of sections because we&#39;re trying to keep a low profile. The solution to this is to use <code>lea</code> instead as fasm will always generate an opcode which will perform a <a href="https://en.wikipedia.org/wiki/Addressing_mode#PC-relative_2">RIP-relative</a> address calculation which will compute the address of <code>__imp_tab_start</code> as an offset from the current instruction pointer rather than an absolute address. This will always yield the correct address no matter where we&#39;re loaded.</p>
 
 <p>Using the excellent <a href="https://x64dbg.com/">x64dbg</a> debugger, we can see how RIP-relative loads are encoded. The opcode that fasm generated for our <code>lea</code> consists of the bytes in the screenshot below:</p>
 
@@ -625,7 +626,7 @@ import_end
 
 <p><img src="/img/absolute.png" alt="Absolute addressing"></p>
 
-<p>The difference is immediately obvious as the bytes as the address is absolutely encoded and now dependent on the module&#39;s load address.</p>
+<p>The difference is immediately obvious as the bytes of the address are absolutely encoded and now dependent on the module&#39;s load address.</p>
 
 <p>Finally, how did we figure out the offset of the import table when we dumped it in WinDbg above? </p>
 <div class="highlight"><pre><code class="language-text" data-lang="text">&gt; u $exentry ;* Unassemble a few instructions from the entry point
@@ -691,7 +692,7 @@ import+0x1000:
     <span class="c1">; hash of the import entry we want. That&#39;s easy to fix by just</span>
     <span class="c1">; subtracting eight from rsi before we put the function address</span>
     <span class="c1">; in rax into the memory location. This populates the import table</span>
-    <span class="c1">; entry with the qword function address and overwrites the uneeded hash.</span>
+    <span class="c1">; entry with the qword function address and overwrites the unneeded hash.</span>
     <span class="nf">mov</span> <span class="p">[</span><span class="nb">rsi</span> <span class="o">-</span> <span class="mi">8</span><span class="p">],</span> <span class="nb">rax</span>
 
 <span class="c1">; Go to next export</span>
@@ -715,9 +716,9 @@ import+0x1000:
 <p>If no file name extension is specified in the <em>lpFileName</em> parameter, the default library extension .dll is appended. However, the file name string can include a trailing point character (.) to indicate that the module name has no extension. When no path is specified, the function searches for loaded modules whose base name matches the base name of the module to be loaded. If the name matches, the load succeeds. Otherwise, the function searches for the file.</p>
 </blockquote>
 
-<p>Before we get to the code, we have to learn about the <code>sub rsp, 8*5</code> instruction in <code>find_kernel32</code>. Because we are going to be calling the <code>LoadLibraryA</code> Windows API function in our import code, we have to follow the conventions of the Windows x64 ABI. This dictates that the stack be aligned to 16 byte boundaries. After  <code>KERNEL32!BaseThreadInitThunk</code> calls our entry point, the stack is misaligned and subtracting this amount of bytes from the stack pointer will re-align the stack pointer to be a multiple of 16. If we didn&#39;t align the stack then our call to <code>LoadLibraryA</code> call would fail.</p>
+<p>Before we get to the code, we have to learn about the <code>sub rsp, 8*5</code> instruction in <code>find_kernel32</code>. Because we are going to be calling the <code>LoadLibraryA</code> Windows API function in our import code, we have to follow the conventions of the Windows x64 ABI. This dictates that the stack be aligned to 16 byte boundaries. After <code>KERNEL32!BaseThreadInitThunk</code> calls our entry point, the stack is misaligned and subtracting this amount of bytes from the stack pointer will re-align the stack pointer to be a multiple of 16. If we didn&#39;t align the stack then our call to <code>LoadLibraryA</code> call would fail.</p>
 
-<p>Because we load (if the module doesn&#39;t exist in our address space already) DLLs with <code>LoadLibraryA</code> it is necessary to include that import in the list of imports from kernel32. This is a requirement because we refer to the <code>LoadLibraryA</code> label in the importing code itself so fasm has to know where the address to that function is. This also means that kernel32 needs to be the first DLL we import from in our series of invocations of the use macro. <code>LoadLibraryA</code> is only invoked after the import entries for kernel32 have been populated so this causes no issues. If we only wanted to import things from kernel32 then we wouldn&#39;t need to use <code>LoadLibraryA</code> in the first place. If we wanted we could have the use macro insert this hash into every kernel32 table.</p>
+<p>Because we load (if the module doesn&#39;t exist in our address space already) DLLs with <code>LoadLibraryA</code> it is necessary to include that import in the list of imports from kernel32. This is a requirement because we refer to the <code>LoadLibraryA</code> label in the importing code itself so fasm has to know where the address to that function is. This also means that kernel32 needs to be the first DLL we import from in our series of invocations of the use macro. <code>LoadLibraryA</code> is only invoked after the import entries for kernel32 have been populated so this causes no issues. If we only wanted to import things from kernel32 then we wouldn&#39;t need to use <code>LoadLibraryA</code> in the first place. If we wanted we could have the use macro insert this hash and define a label into every kernel32 table instead of imposing this requirement.</p>
 
 <p>Now let&#39;s get to the final piece of code that we need to set up the importing process for the next DLL we want to import:</p>
 <div class="highlight"><pre><code class="language-nasm" data-lang="nasm">    <span class="c1">; rcx big enough because size of # exports</span>
