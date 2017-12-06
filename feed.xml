@@ -5,8 +5,8 @@
     <description>random blog</description>
     <link>/</link>
     <atom:link href="/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Tue, 05 Dec 2017 16:44:46 -0800</pubDate>
-    <lastBuildDate>Tue, 05 Dec 2017 16:44:46 -0800</lastBuildDate>
+    <pubDate>Tue, 05 Dec 2017 16:46:18 -0800</pubDate>
+    <lastBuildDate>Tue, 05 Dec 2017 16:46:18 -0800</lastBuildDate>
     <generator>Jekyll v3.6.2</generator>
     
       <item>
@@ -464,7 +464,7 @@ You don&amp;#39;t have to worry too much about the semantics of the code, just u
         DestroyWindow
 import_end
 &lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
-&lt;p&gt;After this table is placed in the binary which, the binary is then loaded into memory. Let&amp;#39;s assume that we know that it is located at address &lt;code&gt;00000000`004010de&lt;/code&gt;. Let&amp;#39;s dump that location to look at the bytes that we&amp;#39;ve built:&lt;/p&gt;
+&lt;p&gt;After this table is placed in the binary, the binary is then loaded into memory. Let&amp;#39;s assume that we know that it is located at address &lt;code&gt;00000000`004010de&lt;/code&gt;. Let&amp;#39;s dump that location to look at the bytes that we&amp;#39;ve built:&lt;/p&gt;
 &lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;&amp;gt; db 00000000`004010de L 66  ;* display a Dump of Bytes 0x66 bytes Long
 00000000`004010de  0a 6b 65 72 6e 65 6c 33-32 00 0c bf e7 b7 00 00  .kernel32.......
 00000000`004010ee  00 00 4a 9d 70 74 00 00-00 00 5b 10 be 57 00 00  ..J.pt....[..W..
