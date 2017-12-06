@@ -1,13 +1,8 @@
-# TextLog v1.1
+# emsea
 
-TextLog is a minimalist, distraction-free and content-focused Jekyll theme. TextLog uses [Droid Sans](https://fonts.google.com/specimen/Droid+Sans) typeface from Google Web Fonts. TextLog alspo supports [Disqus comment](https://disqus.com/) and [tags](https://heiswayi.github.io/textlog/tagged/).
+Instead of letting Github Pages build the Jekyll site I've had to push its static form manually. This is because the Rouge highlighter
+doesn't seem to support highlighting assembly despite having a lexer for it. Instead I'm using Pygments which is not supported by
+Github Pages anymore.
 
-[**Live Demo**](https://heiswayi.github.io/textlog)
-
-### Screenshot
-
-![TextLog Screenshot](http://i.imgur.com/StRXiZt.png)
-
-### License
-
-[MIT](LICENSE.md)
+This blog is built using [Jekyll](https://jekyllrb.com/) with a modified [textlog](https://github.com/heiswayi/textlog) theme
+by [Heiswayi Nrird](https://heiswayi.nrird.com/).
