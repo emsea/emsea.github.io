@@ -5,8 +5,8 @@
     <description>random blog</description>
     <link>/</link>
     <atom:link href="/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Tue, 05 Dec 2017 16:56:12 -0800</pubDate>
-    <lastBuildDate>Tue, 05 Dec 2017 16:56:12 -0800</lastBuildDate>
+    <pubDate>Thu, 07 Dec 2017 12:52:32 -0800</pubDate>
+    <lastBuildDate>Thu, 07 Dec 2017 12:52:32 -0800</lastBuildDate>
     <generator>Jekyll v3.6.2</generator>
     
       <item>
@@ -446,7 +446,7 @@ ole32!IMAGE_EXPORT_DIRECTORY
 &lt;span class=&quot;c1&quot;&gt;; importing syntax look nice by having an import_start in our DSL :)&lt;/span&gt;
 &lt;span class=&quot;nf&quot;&gt;macro&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;import_start&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;{}&lt;/span&gt;
 &lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
-&lt;p&gt;Is &lt;a href=&quot;https://en.wikipedia.org/wiki/Data_structure_alignment&quot;&gt;alignment&lt;/a&gt; all that important on modern hardware? It used to be. We could certainly shave some bytes off our table if we didn&amp;#39;t care about aligning the entries. Some people say that &lt;a href=&quot;https://lemire.me/blog/2012/05/31/data-alignment-for-speed-myth-or-reality/&quot;&gt;modern processors don&amp;#39;t care most of the time&lt;/a&gt;. Whatever the reality of the situation is, it&amp;#39;s good practice to align your data. We want to be on our best manners if the function addresses contained in the entries are going to be frequently called through. If you want to know more about alignment in C then check out &lt;a href=&quot;http://www.catb.org/esr/structure-packing/&quot;&gt;this page&lt;/a&gt; by ESR.&lt;/p&gt;
+&lt;p&gt;Is &lt;a href=&quot;https://en.wikipedia.org/wiki/Data_structure_alignment&quot;&gt;alignment&lt;/a&gt; all that important on modern x86 hardware? It used to be. We could certainly shave some bytes off our table if we didn&amp;#39;t care about aligning the entries. Some people say that &lt;a href=&quot;https://lemire.me/blog/2012/05/31/data-alignment-for-speed-myth-or-reality/&quot;&gt;modern processors don&amp;#39;t care most of the time&lt;/a&gt;. Whatever the reality of the situation is, it&amp;#39;s good practice to align your data. We want to be on our best manners if the function addresses contained in the entries are going to be frequently called through. If you want to know more about alignment in C then check out &lt;a href=&quot;http://www.catb.org/esr/structure-packing/&quot;&gt;this page&lt;/a&gt; by ESR.&lt;/p&gt;
 
 &lt;p&gt;Those macros aren&amp;#39;t the most appealing code in the world but it works pretty well. Note that we will start importing at &lt;code&gt;__imp_tab_start&lt;/code&gt; which points to the first hash of kernel32&amp;#39;s import table. This is because the first DLL that we are going to get the base of is kernel32 and we won&amp;#39;t have to load it into our address space. For reasons that we&amp;#39;ll learn of later, kernel32 will always need to be the first DLL that we import from with the use macro. 
 You don&amp;#39;t have to worry too much about the semantics of the code, just understand the following explanation of the bytes the macro builds. Let&amp;#39;s say that we invoked our various macros to build an import table:&lt;/p&gt;
