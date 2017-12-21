@@ -5,8 +5,8 @@
     <description>random blog</description>
     <link>/</link>
     <atom:link href="/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Thu, 21 Dec 2017 11:36:10 -0800</pubDate>
-    <lastBuildDate>Thu, 21 Dec 2017 11:36:10 -0800</lastBuildDate>
+    <pubDate>Thu, 21 Dec 2017 12:06:13 -0800</pubDate>
+    <lastBuildDate>Thu, 21 Dec 2017 12:06:13 -0800</lastBuildDate>
     <generator>Jekyll v3.6.2</generator>
     
       <item>
@@ -803,6 +803,11 @@ import+0x1000:
 
 &lt;ul&gt;
 &lt;li&gt;Extremely informative (and readable) book to get if you are serious about learning the x86 ISA quickly&lt;/li&gt;
+&lt;/ul&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&quot;http://x86asm.net/articles/index.html&quot;&gt;x86asm.net&lt;/a&gt;
+
+&lt;ul&gt;
+&lt;li&gt;Site with some nice articles about x86 and x64.&lt;/li&gt;
 &lt;/ul&gt;&lt;/li&gt;
 &lt;li&gt;&lt;a href=&quot;https://www.amazon.com/dp/1931769222&quot;&gt;Hacker Disassembling Uncovered&lt;/a&gt;
 
