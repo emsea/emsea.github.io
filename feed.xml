@@ -5,8 +5,8 @@
     <description>random blog</description>
     <link>/</link>
     <atom:link href="/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Thu, 21 Dec 2017 12:06:13 -0800</pubDate>
-    <lastBuildDate>Thu, 21 Dec 2017 12:06:13 -0800</lastBuildDate>
+    <pubDate>Thu, 21 Dec 2017 14:06:21 -0800</pubDate>
+    <lastBuildDate>Thu, 21 Dec 2017 14:06:21 -0800</lastBuildDate>
     <generator>Jekyll v3.6.2</generator>
     
       <item>
@@ -35,7 +35,7 @@
 
 &lt;p&gt;In this diagram, only the parts of the headers that we will be focusing on are shown. This doesn&amp;#39;t show the section headers which describe locations and metadata about each section, the sub-structures that are contained within the PE header, and more. We are primarily interested in the export directory of a DLL as it contains all the references to functions within the code section(s) of the DLL that we want to search for.&lt;/p&gt;
 
-&lt;p&gt;All data references (pointers) in the PE headers are stored as *RVA*s or Relative Virtual Addresses. RVAs are offsets from the beginning of the file (and in rare cases in object files, from the beginning of a section but you don&amp;#39;t have to worry about those). Pointers are stored this way because PE files can be loaded/relocated at different places in memory and the headers can&amp;#39;t assume a preferred base address. To find the address in our address space of an RVA in a DLL we have to have a pointer to the base address of the module that we add to the RVA. Data references in headers stored as RVAs will always be correct no matter where the module is loaded in memory as long as they are added to the correct base address. If our DLL is mapped into memory beginning at &lt;code&gt;0x400000&lt;/code&gt; and a field in our module&amp;#39;s header refers to a piece of data at RVA &lt;code&gt;0xFFF&lt;/code&gt; then the data is located at &lt;code&gt;0x400000 + 0xFFF = 0x0x400FFF&lt;/code&gt; in our address space. A &lt;code&gt;.reloc&lt;/code&gt; section could be used as well but the PE header should be valid without &lt;code&gt;.reloc&lt;/code&gt;, hence the need for RVAs.&lt;/p&gt;
+&lt;p&gt;All data references (pointers) in the PE headers are stored as &lt;strong&gt;RVA&lt;/strong&gt;s or Relative Virtual Addresses. RVAs are offsets from the beginning of the file (and in rare cases in object files, from the beginning of a section but you don&amp;#39;t have to worry about those). Pointers are stored this way because PE files can be loaded/relocated at different places in memory and the headers can&amp;#39;t assume a preferred base address. To find the address in our address space of an RVA in a DLL we have to have a pointer to the base address of the module that we add to the RVA. Data references in headers stored as RVAs will always be correct no matter where the module is loaded in memory as long as they are added to the correct base address. If our DLL is mapped into memory beginning at &lt;code&gt;0x400000&lt;/code&gt; and a field in our module&amp;#39;s header refers to a piece of data at RVA &lt;code&gt;0xFFF&lt;/code&gt; then the data is located at &lt;code&gt;0x400000 + 0xFFF = 0x0x400FFF&lt;/code&gt; in our address space. A &lt;code&gt;.reloc&lt;/code&gt; section could be used as well but the PE header should be valid without &lt;code&gt;.reloc&lt;/code&gt;, hence the need for RVAs.&lt;/p&gt;
 
 &lt;h3&gt;Creating a PE file in fasm&lt;/h3&gt;
 
