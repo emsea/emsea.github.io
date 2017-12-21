@@ -5,8 +5,8 @@
     <description>random blog</description>
     <link>/</link>
     <atom:link href="/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Thu, 07 Dec 2017 12:52:32 -0800</pubDate>
-    <lastBuildDate>Thu, 07 Dec 2017 12:52:32 -0800</lastBuildDate>
+    <pubDate>Thu, 21 Dec 2017 11:30:16 -0800</pubDate>
+    <lastBuildDate>Thu, 21 Dec 2017 11:30:16 -0800</lastBuildDate>
     <generator>Jekyll v3.6.2</generator>
     
       <item>
@@ -809,7 +809,7 @@ import+0x1000:
 &lt;ul&gt;
 &lt;li&gt;The 1st and 2nd editions of this book are quite different. Kris Kaspersky (RIP) has released the the draft of the second edition for free.&lt;/li&gt;
 &lt;/ul&gt;&lt;/li&gt;
-&lt;li&gt;&lt;a href=&quot;Software%20Developer%20Manuals&quot;&gt;Intel Software Developer Manuals&lt;/a&gt;
+&lt;li&gt;&lt;a href=&quot;https://software.intel.com/en-us/articles/intel-sdm&quot;&gt;Intel Software Developer Manuals&lt;/a&gt;
 
 &lt;ul&gt;
 &lt;li&gt;The definitive reference&lt;/li&gt;
@@ -817,6 +817,16 @@ import+0x1000:
 &lt;/ul&gt;&lt;/li&gt;
 &lt;li&gt;&lt;a href=&quot;https://godbolt.org/&quot;&gt;Compiler Explorer&lt;/a&gt;&lt;/li&gt;
 &lt;li&gt;&lt;a href=&quot;https://flatassembler.net/download.php&quot;&gt;fasm source code&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&quot;http://www.hugi.scene.org/online/coding/hugi%2017%20-%20coaax.htm&quot;&gt;The Hidden Power of BCD Instructions&lt;/a&gt;
+
+&lt;ul&gt;
+&lt;li&gt;Cool demoscene zine article about some neglected instructions.&lt;/li&gt;
+&lt;/ul&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&quot;Hugi%20Special%20Edition%20#1%20diskmag&quot;&gt;https://files.scene.org/view/mags/hugi/hugise01.zip&lt;/a&gt;
+
+&lt;ul&gt;
+&lt;li&gt;Some old school articles and creative techniques related to assembly, compression, and more.&lt;/li&gt;
+&lt;/ul&gt;&lt;/li&gt;
 &lt;/ul&gt;
 
 &lt;h3&gt;Final code&lt;/h3&gt;
