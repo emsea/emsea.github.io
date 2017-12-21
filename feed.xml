@@ -5,8 +5,8 @@
     <description>random blog</description>
     <link>/</link>
     <atom:link href="/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Thu, 21 Dec 2017 11:30:16 -0800</pubDate>
-    <lastBuildDate>Thu, 21 Dec 2017 11:30:16 -0800</lastBuildDate>
+    <pubDate>Thu, 21 Dec 2017 11:32:27 -0800</pubDate>
+    <lastBuildDate>Thu, 21 Dec 2017 11:32:27 -0800</lastBuildDate>
     <generator>Jekyll v3.6.2</generator>
     
       <item>
@@ -822,7 +822,7 @@ import+0x1000:
 &lt;ul&gt;
 &lt;li&gt;Cool demoscene zine article about some neglected instructions.&lt;/li&gt;
 &lt;/ul&gt;&lt;/li&gt;
-&lt;li&gt;&lt;a href=&quot;Hugi%20Special%20Edition%20#1%20diskmag&quot;&gt;https://files.scene.org/view/mags/hugi/hugise01.zip&lt;/a&gt;
+&lt;li&gt;&lt;a href=&quot;https://files.scene.org/view/mags/hugi/hugise01.zip&quot;&gt;Hugi Special Edition #1 diskmag&lt;/a&gt;
 
 &lt;ul&gt;
 &lt;li&gt;Some old school articles and creative techniques related to assembly, compression, and more.&lt;/li&gt;
