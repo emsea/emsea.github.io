@@ -5,8 +5,8 @@
     <description>random blog</description>
     <link>/</link>
     <atom:link href="/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Thu, 21 Dec 2017 11:32:27 -0800</pubDate>
-    <lastBuildDate>Thu, 21 Dec 2017 11:32:27 -0800</lastBuildDate>
+    <pubDate>Thu, 21 Dec 2017 11:36:10 -0800</pubDate>
+    <lastBuildDate>Thu, 21 Dec 2017 11:36:10 -0800</lastBuildDate>
     <generator>Jekyll v3.6.2</generator>
     
       <item>
@@ -795,7 +795,7 @@ import+0x1000:
 &lt;ul&gt;
 &lt;li&gt;&lt;a href=&quot;https://pacman128.github.io/pcasm/&quot;&gt;Dr. Paul Carter&amp;#39;s PC Assembly Language&lt;/a&gt;&lt;/li&gt;
 &lt;li&gt;&lt;a href=&quot;http://www.lighterra.com/papers/modernmicroprocessors/&quot;&gt;Modern Microprocessors: A 90-Minute Guide&lt;/a&gt;&lt;/li&gt;
-&lt;li&gt;&lt;a href=&quot;Assembly%20Programming%20Journal&quot;&gt;Assembly Programming Journal&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&quot;http://mattst88.com/programming/?page=APJ&quot;&gt;Assembly Programming Journal&lt;/a&gt;&lt;/li&gt;
 &lt;li&gt;&lt;a href=&quot;http://www.agner.org/optimize/&quot;&gt;Agner Fog&amp;#39;s Software Optimization Resources&lt;/a&gt;&lt;/li&gt;
 &lt;li&gt;&lt;a href=&quot;https://www.swansontec.com/sregisters.html&quot;&gt;The Art of Picking Intel Registers&lt;/a&gt;&lt;/li&gt;
 &lt;li&gt;&lt;a href=&quot;http://www.codemachine.com/article_x64deepdive.html&quot;&gt;X64 Deep Dive&lt;/a&gt;&lt;/li&gt;
