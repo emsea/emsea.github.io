@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html>
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RAM-less Buffers - emsea</title>
+  <meta name="description" content="random blog">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="/2017/12/31/register-buffer/">
+  <link rel="alternate" type="application/rss+xml" title="emsea" href="/feed.xml">
+</head>
+
+  <body>
+    <div class="page-content">
+      <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+  <header class="post-header">
+    <a href="/">Home</a>
+    <br><br>
+    <h1 class="post-title" itemprop="name headline">RAM-less Buffers</h1>
+    <p class="post-meta">
+      <time datetime="2017-12-31T00:00:00-08:00" itemprop="datePublished">Dec 31, 2017</time>
+      
+
+      
+  		
+
+  		
+  		
+
+  		•	<span class="tags" itemprop="tags">
+  				
+  				
+  				<a href="/tagged#assembly">#assembly</a>
+  			<a href="/tagged#windows">#Windows</a>
+  			<a href="/tagged#c">#C++</a>
+  			</span>
+
+  	  
+
+    </p>
+  </header>
+  <div class="post-content" itemprop="articleBody">
+    <h2>Introduction</h2>
+
+<p>Have you ever looked at the x86 <a href="https://en.wikipedia.org/wiki/Streaming_SIMD_Extensions">SSE</a> or <a href="https://en.wikipedia.org/wiki/Advanced_Vector_Extensions">AVX</a> registers in a debugger and wanted to use their bytes as a contiguous on-core buffer? </p>
+
+<p><img src="/img/xmm.png" alt="XMM registers"></p>
+
+<p>Clearly you can&#39;t get pointers into a buffer fashioned out of registers but it turns out that such a construction isn&#39;t hard to implement with some careful considerations in mind. We&#39;ll be using the g++ compiler in this post as MSVC doesn&#39;t currently support inline x64 assembly. We will be focusing on Windows and will be using MinGW to compile our code. We could also write this technique entirely in assembly but this option isn&#39;t as enticing because switch statements, templates, and classes make things very convenient. We will be targetting 64-bit processors that support <a href="https://en.wikipedia.org/wiki/SSE4">SSE4</a> which allows us to only use XMM registers (as opposed to the newer YMM or ZMM extensions). The goal is going to be creating an array <a href="https://en.wikipedia.org/wiki/Abstract_data_type">ADT</a> whos backing storage is going to be XMM registers.</p>
+
+<p>The reason why we <em>won&#39;t</em> be considering other operating systems is because the <a href="http://wiki.osdev.org/System_V_ABI">System V ABI</a> doesn&#39;t preserve any of the XMM registers between calls and puts the burden on the caller to save them on the stack. If you think about it, this sort of defeats the purpose of using a register buffer if we&#39;re always going to be pushing our bytes to memory in user space.</p>
+
+<p>Now that that&#39;s out of the way, let&#39;s take a look at the implementation.</p>
+
+<h2>XMM Registers</h2>
+
+<p>There are 16 individual 16-byte wide XMM registers which are meant to be used for <a href="https://en.wikipedia.org/wiki/SIMD">SIMD</a> and floating point operations. The Microsoft <a href="https://msdn.microsoft.com/en-us/library/ms235286.aspx">x64 ABI</a> treats <code>XMM0</code>-<code>XMM5</code> as volatile registers which aren&#39;t preserved between function calls and are used to pass <code>double</code>s to functions and perform floating point opeartions (<a href="https://en.wikipedia.org/wiki/X87">x87</a> is all but deprecated these days) among other things. However, registers <code>XMM6</code>-<code>XMM15</code> are required to be preserved by the callee. We&#39;ll be using these registers to form our buffer so that we won&#39;t have to worry about functions inadvertently clobbering our bytes. If a function decides to use one of our buffer registers it will have to save/restore it using the stack per the rules of the ABI. This sort of makes the title of this post a misnomer but the kernel also saves our registers on context switch so RAM cannot be completely avoided. We&#39;re just having fun in the end anyway. </p>
+
+<p>Since we&#39;ll be using <code>XMM6</code>-<code>XMM15</code> that gives us <code>10 registers * 16 bytes = 160 bytes</code> to play with in our buffer. But how do we manipulate the bytes in our buffer? There are a few instructions that will come in handy:</p>
+
+<h3>movdqa</h3>
+
+<p>This instruction allows us to move <strong>d</strong>ouble <strong>q</strong>word (<code>double(8) = 16 bytes</code>) values between two XMM registers. An example of its use would be:</p>
+<div class="highlight"><pre><code class="language-nasm" data-lang="nasm"><span class="nf">movdqa</span> <span class="nv">xmm0</span><span class="p">,</span> <span class="nv">xmm5</span>   <span class="c1">; mov the dqword value of xmm5 into xmm0</span>
+</code></pre></div>
+<p>We won&#39;t be using this to move memory into an XMM register so we won&#39;t have to worry about required memory alignment restrictions. There are different instruction mnemonic suffixes for different sizes of data we want to move. Another <a href="https://en.wikipedia.org/wiki/MMX_(instruction_set)">MMX</a>/SSE mov variant would be <code>movq</code> which deals with 8 byte qword values rather than 16 bytes at one time.</p>
+
+<h3>pinsrq</h3>
+
+<p>The <code>pinsr*</code> family of instructions allows us to insert data at a specified offset into an XMM register. The suffix specifiers to this instruction will select the size of data we want to insert into the XMM. Let&#39;s look at some examples:</p>
+<div class="highlight"><pre><code class="language-nasm" data-lang="nasm"><span class="c1">; Insert the qword value of rbx into the 0th location of xmm0.</span>
+<span class="c1">; If xmm0 = 0x00000000000000000000000000000000 and rax = 0xAAAAAAAAAAAAAAAA</span>
+<span class="c1">; after the following instruction executes xmm0 = 0x0000000000000000AAAAAAAAAAAAAAAA</span>
+<span class="nf">pinsrq</span> <span class="nv">xmm0</span><span class="p">,</span> <span class="nb">rax</span><span class="p">,</span> <span class="mi">0</span>
+
+<span class="c1">; Using the same initial values as above, after this instruction executes</span>
+<span class="c1">; xmm0 = 0xAAAAAAAAAAAAAAAA0000000000000000. The immediate constant specifies</span>
+<span class="c1">; the offset multiple of the data size rather than the byte offset.</span>
+<span class="nf">pinsrq</span> <span class="nv">xmm0</span><span class="p">,</span> <span class="nb">rax</span><span class="p">,</span> <span class="mi">1</span> <span class="c1">; insert the qword value of rax into the 0th location of xmm0.</span>
+
+<span class="c1">; Last example. Assume that ebx = 0xFFFFFFFF and xmm0 is zero&#39;d out. This instruction</span>
+<span class="c1">; will produce xmm0 = 0x00000000FFFFFFFF0000000000000000 because it&#39;s putting the </span>
+<span class="c1">; dword of -1 into the 2*4=8th position in the number.</span>
+<span class="nf">pinsrd</span> <span class="nv">xmm0</span><span class="p">,</span> <span class="nb">ebx</span><span class="p">,</span> <span class="mi">2</span>
+</code></pre></div>
+<p>We&#39;ll be using this instruction to insert data into our buffer. However, we will only be using the <code>pinsrq</code> size variant.</p>
+
+<h3>pextrq</h3>
+
+<p>The <code>pextr*</code> family of instructions extracts data at specified offsets. It&#39;s the inverse of <code>pinsr*</code>. We will be using this instruction to extract data out of our buffer.</p>
+<div class="highlight"><pre><code class="language-nasm" data-lang="nasm"><span class="c1">; Get the first 8 bytes out of the xmm0 register and move them into rax</span>
+<span class="nf">pextrq</span> <span class="nb">rax</span><span class="p">,</span> <span class="nv">xmm0</span><span class="p">,</span> <span class="mi">0</span>
+
+<span class="c1">; Get the second 8 bytes out of the xmm0 register and move them into rbx</span>
+<span class="nf">pextrq</span> <span class="nb">rbx</span><span class="p">,</span> <span class="nv">xmm0</span><span class="p">,</span> <span class="mi">1</span>
+</code></pre></div>
+<p>That&#39;s it. We&#39;ll only be using these three instructions to do everything we need. Let&#39;s move on to seeing how we can write this in C++.</p>
+
+<h2>The Implementation</h2>
+
+<p>The first thing we want to do is write a helper function which takes an offset and returns the qword at that offset. Every XMM register holds two qwords so we will need another function called <code>get_reg_in_xmm0</code> which will copy the data from the dqword XMM register that contains our qword into <code>XMM0</code> which is a volatile register whose value we don&#39;t need to care about preserving. After we have the dqword that we need in <code>XMM0</code>, we want to extract the correct 8 bytes from it. the <code>pextrq</code> instruction requires that the extraction offset be an immediate constant rather than a register. Because of this we will check to see if we need to extract the high or low qword from the XMM register and move it into <code>rax</code>. After that we can return the value that we extracted.</p>
+<div class="highlight"><pre><code class="language-c++" data-lang="c++"><span class="kt">uint64_t</span> <span class="n">register_buffer</span><span class="o">::</span><span class="n">get_qword</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span> <span class="n">offset</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="n">get_reg_in_xmm0</span><span class="p">(</span><span class="n">offset</span><span class="p">);</span>
+
+    <span class="c1">// is offset an odd multiple of 8?</span>
+    <span class="k">if</span><span class="p">((</span><span class="n">offset</span> <span class="o">/</span> <span class="mi">8</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mi">1</span><span class="p">)</span> <span class="p">{</span>
+        <span class="k">asm</span><span class="p">(</span><span class="s">&quot;pextrq rax, xmm0, 1&quot;</span><span class="p">);</span> <span class="c1">// extract the high qword</span>
+    <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+        <span class="k">asm</span><span class="p">(</span><span class="s">&quot;pextrq rax, xmm0, 0&quot;</span><span class="p">);</span> <span class="c1">// extract the low qword</span>
+    <span class="p">}</span>
+
+    <span class="kt">uint64_t</span> <span class="n">buf_data</span><span class="p">;</span>
+    <span class="k">asm</span><span class="p">(</span><span class="s">&quot;mov %0, rax&quot;</span><span class="o">:</span><span class="s">&quot;=r&quot;</span><span class="p">(</span><span class="n">buf_data</span><span class="p">));</span>
+
+    <span class="k">return</span> <span class="n">buf_data</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>For the above function work we need to be able to move the value of the XMM register corresponding to the requested <code>offset</code> into <code>XMM0</code>. This is easy enough using integer division to find the exact register that holds the data we need:</p>
+<div class="highlight"><pre><code class="language-c++" data-lang="c++"><span class="kt">void</span> <span class="n">register_buffer</span><span class="o">::</span><span class="n">get_reg_in_xmm0</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span> <span class="n">offset</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">switch</span><span class="p">(</span><span class="n">offset</span> <span class="o">/</span> <span class="mi">16</span><span class="p">)</span> <span class="p">{</span>
+        <span class="k">case</span> <span class="mi">0</span><span class="o">:</span> <span class="k">asm</span><span class="p">(</span><span class="s">&quot;movdqa xmm0, xmm6&quot;</span><span class="p">);</span>  <span class="k">break</span><span class="p">;</span>
+        <span class="k">case</span> <span class="mi">1</span><span class="o">:</span> <span class="k">asm</span><span class="p">(</span><span class="s">&quot;movdqa xmm0, xmm7&quot;</span><span class="p">);</span>  <span class="k">break</span><span class="p">;</span>
+        <span class="k">case</span> <span class="mi">2</span><span class="o">:</span> <span class="k">asm</span><span class="p">(</span><span class="s">&quot;movdqa xmm0, xmm8&quot;</span><span class="p">);</span>  <span class="k">break</span><span class="p">;</span>
+        <span class="k">case</span> <span class="mi">3</span><span class="o">:</span> <span class="k">asm</span><span class="p">(</span><span class="s">&quot;movdqa xmm0, xmm9&quot;</span><span class="p">);</span>  <span class="k">break</span><span class="p">;</span>
+        <span class="k">case</span> <span class="mi">4</span><span class="o">:</span> <span class="k">asm</span><span class="p">(</span><span class="s">&quot;movdqa xmm0, xmm10&quot;</span><span class="p">);</span> <span class="k">break</span><span class="p">;</span>
+        <span class="k">case</span> <span class="mi">5</span><span class="o">:</span> <span class="k">asm</span><span class="p">(</span><span class="s">&quot;movdqa xmm0, xmm11&quot;</span><span class="p">);</span> <span class="k">break</span><span class="p">;</span>
+        <span class="k">case</span> <span class="mi">6</span><span class="o">:</span> <span class="k">asm</span><span class="p">(</span><span class="s">&quot;movdqa xmm0, xmm12&quot;</span><span class="p">);</span> <span class="k">break</span><span class="p">;</span>
+        <span class="k">case</span> <span class="mi">7</span><span class="o">:</span> <span class="k">asm</span><span class="p">(</span><span class="s">&quot;movdqa xmm0, xmm13&quot;</span><span class="p">);</span> <span class="k">break</span><span class="p">;</span>
+        <span class="k">case</span> <span class="mi">8</span><span class="o">:</span> <span class="k">asm</span><span class="p">(</span><span class="s">&quot;movdqa xmm0, xmm14&quot;</span><span class="p">);</span> <span class="k">break</span><span class="p">;</span>
+        <span class="k">case</span> <span class="mi">9</span><span class="o">:</span> <span class="k">asm</span><span class="p">(</span><span class="s">&quot;movdqa xmm0, xmm15&quot;</span><span class="p">);</span> <span class="k">break</span><span class="p">;</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>We can get qwords out of our buffer but we need to be able to set them as well. To do that we will repeat the process of obtaining the correct qword from the <code>offset</code> into <code>XMM0</code>. After that we will see which qword we need to set depending on if the <code>offset</code> corresponds to the high or low qword currently in <code>XMM0</code>. After that we just move the user-specified <code>uint64_t</code> value into <code>rax</code> and then move that into the right spot within <code>XMM0</code>. We then do the reverse of the <code>get_reg_in_xmm0</code> function and move the dirty value we just created back to the correct XMM register for the specified <code>offset</code>.</p>
+<div class="highlight"><pre><code class="language-c++" data-lang="c++"><span class="kt">void</span> <span class="n">register_buffer</span><span class="o">::</span><span class="n">set_qword</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span> <span class="n">offset</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="n">val</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="n">get_reg_in_xmm0</span><span class="p">(</span><span class="n">offset</span><span class="p">);</span>
+
+    <span class="k">if</span><span class="p">((</span><span class="n">offset</span> <span class="o">/</span> <span class="mi">8</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mi">1</span><span class="p">)</span> <span class="p">{</span>
+        <span class="k">asm</span><span class="p">(</span><span class="s">&quot;mov rax, %0&quot;</span><span class="o">::</span><span class="s">&quot;r&quot;</span><span class="p">(</span><span class="n">val</span><span class="p">));</span>
+        <span class="k">asm</span><span class="p">(</span><span class="s">&quot;pinsrq xmm0, rax, 1&quot;</span><span class="p">);</span>
+    <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+        <span class="k">asm</span><span class="p">(</span><span class="s">&quot;mov rax, %0&quot;</span><span class="o">::</span><span class="s">&quot;r&quot;</span><span class="p">(</span><span class="n">val</span><span class="p">));</span>
+        <span class="k">asm</span><span class="p">(</span><span class="s">&quot;pinsrq xmm0, rax, 0&quot;</span><span class="p">);</span>
+    <span class="p">}</span>
+
+    <span class="k">switch</span><span class="p">(</span><span class="n">offset</span> <span class="o">/</span> <span class="mi">16</span><span class="p">)</span> <span class="p">{</span>
+        <span class="k">case</span> <span class="mi">0</span><span class="o">:</span> <span class="k">asm</span><span class="p">(</span><span class="s">&quot;movdqa xmm6,  xmm0&quot;</span><span class="p">);</span> <span class="k">break</span><span class="p">;</span>
+        <span class="k">case</span> <span class="mi">1</span><span class="o">:</span> <span class="k">asm</span><span class="p">(</span><span class="s">&quot;movdqa xmm7,  xmm0&quot;</span><span class="p">);</span> <span class="k">break</span><span class="p">;</span>
+        <span class="k">case</span> <span class="mi">2</span><span class="o">:</span> <span class="k">asm</span><span class="p">(</span><span class="s">&quot;movdqa xmm8,  xmm0&quot;</span><span class="p">);</span> <span class="k">break</span><span class="p">;</span>
+        <span class="k">case</span> <span class="mi">3</span><span class="o">:</span> <span class="k">asm</span><span class="p">(</span><span class="s">&quot;movdqa xmm9,  xmm0&quot;</span><span class="p">);</span> <span class="k">break</span><span class="p">;</span>
+        <span class="k">case</span> <span class="mi">4</span><span class="o">:</span> <span class="k">asm</span><span class="p">(</span><span class="s">&quot;movdqa xmm10, xmm0&quot;</span><span class="p">);</span> <span class="k">break</span><span class="p">;</span>
+        <span class="k">case</span> <span class="mi">5</span><span class="o">:</span> <span class="k">asm</span><span class="p">(</span><span class="s">&quot;movdqa xmm11, xmm0&quot;</span><span class="p">);</span> <span class="k">break</span><span class="p">;</span>
+        <span class="k">case</span> <span class="mi">6</span><span class="o">:</span> <span class="k">asm</span><span class="p">(</span><span class="s">&quot;movdqa xmm12, xmm0&quot;</span><span class="p">);</span> <span class="k">break</span><span class="p">;</span>
+        <span class="k">case</span> <span class="mi">7</span><span class="o">:</span> <span class="k">asm</span><span class="p">(</span><span class="s">&quot;movdqa xmm13, xmm0&quot;</span><span class="p">);</span> <span class="k">break</span><span class="p">;</span>
+        <span class="k">case</span> <span class="mi">8</span><span class="o">:</span> <span class="k">asm</span><span class="p">(</span><span class="s">&quot;movdqa xmm14, xmm0&quot;</span><span class="p">);</span> <span class="k">break</span><span class="p">;</span>
+        <span class="k">case</span> <span class="mi">9</span><span class="o">:</span> <span class="k">asm</span><span class="p">(</span><span class="s">&quot;movdqa xmm15, xmm0&quot;</span><span class="p">);</span> <span class="k">break</span><span class="p">;</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>The reason that we have be working on qwords instead of other datatypes right away is primarily because the <code>pinsr*</code> and <code>pextr*</code> instructions require a immediate constant offset into the specified XMM register. Currently we only need to specify <code>0</code> or <code>1</code> as the offset because there are only two qwords per XMM register. If we had others we would need to specify yet more offsets and have even more tests to see which exact part the user-specified <code>offset</code> fell under. By just operating on qwords and then (as we&#39;ll see in a moment) modifying the data within the obtained qwords at a higher level of abstraction, we save ourselves a lot of trouble.</p>
+
+<p>Now that we have our support functions for getting/setting qword values, let&#39;s extend that to being able to store any datatype as long as it is of byte/word/dword/qword size:</p>
+<div class="highlight"><pre><code class="language-c++" data-lang="c++"><span class="k">class</span> <span class="nc">register_buffer</span>
+<span class="p">{</span>
+<span class="k">public</span><span class="o">:</span>
+    <span class="n">register_buffer</span><span class="p">(</span><span class="n">register_buffer</span> <span class="k">const</span><span class="o">&amp;</span><span class="p">)</span> <span class="o">=</span> <span class="k">delete</span><span class="p">;</span>
+    <span class="kt">void</span> <span class="k">operator</span><span class="o">=</span><span class="p">(</span><span class="n">register_buffer</span> <span class="k">const</span><span class="o">&amp;</span><span class="p">)</span> <span class="o">=</span> <span class="k">delete</span><span class="p">;</span>
+
+    <span class="c1">// register_buffer is a singleton because there is only one instance of </span>
+    <span class="c1">// the XMM registers. You cannot share this buffer between multiple threads as each</span>
+    <span class="c1">// thread gets its own buffer (that is not accounted for in this implementation)</span>
+    <span class="k">static</span> <span class="n">register_buffer</span><span class="o">&amp;</span> <span class="n">instance</span><span class="p">()</span>
+    <span class="p">{</span>
+        <span class="k">static</span> <span class="n">register_buffer</span> <span class="n">rb</span><span class="p">;</span>
+        <span class="k">return</span> <span class="n">rb</span><span class="p">;</span>
+    <span class="p">}</span>
+
+    <span class="k">template</span><span class="o">&lt;</span><span class="k">typename</span> <span class="n">T</span><span class="o">&gt;</span>
+    <span class="n">T</span> <span class="n">get</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span> <span class="n">index</span><span class="p">)</span>
+    <span class="p">{</span>
+        <span class="k">static_assert</span><span class="p">(</span><span class="k">sizeof</span><span class="p">(</span><span class="n">T</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span> <span class="o">||</span>
+                      <span class="k">sizeof</span><span class="p">(</span><span class="n">T</span><span class="p">)</span> <span class="o">==</span> <span class="mi">2</span> <span class="o">||</span>
+                      <span class="k">sizeof</span><span class="p">(</span><span class="n">T</span><span class="p">)</span> <span class="o">==</span> <span class="mi">4</span> <span class="o">||</span>
+                      <span class="k">sizeof</span><span class="p">(</span><span class="n">T</span><span class="p">)</span> <span class="o">==</span> <span class="mi">8</span><span class="p">,</span> <span class="s">&quot;Invalid get&lt;T&gt; type size&quot;</span><span class="p">);</span>
+
+        <span class="c1">// Get logical index into our buffer ADT and obtain the containing qword</span>
+        <span class="c1">// from the logical index</span>
+        <span class="n">std</span><span class="o">::</span><span class="kt">size_t</span> <span class="n">offset</span> <span class="o">=</span> <span class="n">index</span> <span class="o">*</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">T</span><span class="p">);</span>
+        <span class="kt">uint64_t</span> <span class="n">qword_val</span> <span class="o">=</span> <span class="n">get_qword</span><span class="p">(</span><span class="n">offset</span><span class="p">);</span>
+
+        <span class="c1">// Position the requested value to be in the least significant bytes of </span>
+        <span class="c1">// the qword before casting the qword to be of size T.</span>
+        <span class="kt">uint64_t</span> <span class="n">ret</span> <span class="o">=</span> <span class="n">qword_val</span> <span class="o">&gt;&gt;</span> <span class="p">(</span><span class="n">offset</span> <span class="o">%</span> <span class="mi">8</span><span class="p">)</span> <span class="o">*</span> <span class="mi">8</span><span class="p">;</span>
+        <span class="k">return</span> <span class="o">*</span><span class="k">reinterpret_cast</span><span class="o">&lt;</span><span class="n">T</span><span class="o">*&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="n">ret</span><span class="p">);</span>
+    <span class="p">}</span>
+
+    <span class="k">template</span><span class="o">&lt;</span><span class="k">typename</span> <span class="n">T</span><span class="o">&gt;</span>
+    <span class="kt">void</span> <span class="n">set</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span> <span class="n">index</span><span class="p">,</span> <span class="n">T</span> <span class="n">val</span><span class="p">)</span>
+    <span class="p">{</span>
+        <span class="k">static_assert</span><span class="p">(</span><span class="k">sizeof</span><span class="p">(</span><span class="n">T</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span> <span class="o">||</span>
+                      <span class="k">sizeof</span><span class="p">(</span><span class="n">T</span><span class="p">)</span> <span class="o">==</span> <span class="mi">2</span> <span class="o">||</span>
+                      <span class="k">sizeof</span><span class="p">(</span><span class="n">T</span><span class="p">)</span> <span class="o">==</span> <span class="mi">4</span> <span class="o">||</span>
+                      <span class="k">sizeof</span><span class="p">(</span><span class="n">T</span><span class="p">)</span> <span class="o">==</span> <span class="mi">8</span><span class="p">,</span> <span class="s">&quot;Invalid set&lt;T&gt; type size&quot;</span><span class="p">);</span>
+
+        <span class="c1">// Get previously existing qword that contains the bytes we</span>
+        <span class="c1">// want to set</span>
+        <span class="n">std</span><span class="o">::</span><span class="kt">size_t</span> <span class="n">offset</span> <span class="o">=</span> <span class="n">index</span> <span class="o">*</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">T</span><span class="p">);</span>
+        <span class="kt">uint64_t</span> <span class="n">qword_val</span> <span class="o">=</span> <span class="n">get_qword</span><span class="p">(</span><span class="n">offset</span><span class="p">);</span>
+
+        <span class="c1">// Round down to the nearest multiple of 8 and then obtain</span>
+        <span class="c1">// the distance between that multiple and the current offset.</span>
+        <span class="c1">// This lets us easily set the correct bytes by using</span>
+        <span class="c1">// pointer arithmetic</span>
+        <span class="n">std</span><span class="o">::</span><span class="kt">size_t</span> <span class="n">reg_index</span> <span class="o">=</span> <span class="p">(</span><span class="n">offset</span> <span class="o">-</span> <span class="p">(</span><span class="n">offset</span> <span class="o">&amp;</span> <span class="o">~</span><span class="mi">7</span><span class="p">))</span> <span class="o">/</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">T</span><span class="p">);</span>
+        <span class="o">*</span><span class="p">(</span><span class="k">reinterpret_cast</span><span class="o">&lt;</span><span class="n">T</span><span class="o">*&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="n">qword_val</span><span class="p">)</span> <span class="o">+</span> <span class="n">reg_index</span><span class="p">)</span> <span class="o">=</span> <span class="n">val</span><span class="p">;</span>
+
+        <span class="n">set_qword</span><span class="p">(</span><span class="n">offset</span><span class="p">,</span> <span class="n">qword_val</span><span class="p">);</span>
+    <span class="p">}</span>
+
+    <span class="c1">// num xmm regs in buf * xmm reg size</span>
+    <span class="k">const</span> <span class="n">std</span><span class="o">::</span><span class="kt">size_t</span> <span class="n">size</span> <span class="o">=</span> <span class="mi">10</span> <span class="o">*</span> <span class="mi">16</span><span class="p">;</span>
+
+<span class="k">private</span><span class="o">:</span>
+    <span class="k">static</span> <span class="kt">void</span> <span class="n">get_reg_in_xmm0</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span> <span class="n">offset</span><span class="p">);</span>
+    <span class="k">static</span> <span class="kt">uint64_t</span> <span class="nf">get_qword</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span> <span class="n">offset</span><span class="p">);</span>
+    <span class="k">static</span> <span class="kt">void</span> <span class="nf">set_qword</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span> <span class="n">offset</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="n">val</span><span class="p">);</span>
+
+    <span class="n">register_buffer</span><span class="p">()</span> <span class="p">{}</span>
+<span class="p">};</span>
+</code></pre></div>
+<p>Now that our class is fully implemented let&#39;s play around with our buffer:</p>
+<div class="highlight"><pre><code class="language-c++" data-lang="c++"><span class="cp">#include</span> <span class="cpf">&lt;cstdio&gt;</span><span class="cp"></span>
+<span class="cp">#include</span> <span class="cpf">&lt;cstdint&gt;</span><span class="cp"></span>
+
+<span class="cp">#include</span> <span class="cpf">&quot;register_buffer.h&quot;</span><span class="cp"></span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">()</span>
+<span class="p">{</span>
+    <span class="k">auto</span><span class="o">&amp;</span> <span class="n">rb</span> <span class="o">=</span> <span class="n">register_buffer</span><span class="o">::</span><span class="n">instance</span><span class="p">();</span>
+
+    <span class="n">rb</span><span class="p">.</span><span class="n">set</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mh">0xAAAAAAAA</span><span class="p">);</span>
+    <span class="n">rb</span><span class="p">.</span><span class="n">set</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mh">0xBBBBBBBB</span><span class="p">);</span>
+    <span class="n">rb</span><span class="p">.</span><span class="n">set</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mh">0xCCCCCCCC</span><span class="p">);</span>
+    <span class="n">rb</span><span class="p">.</span><span class="n">set</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mh">0xDDDDDDDD</span><span class="p">);</span>
+    <span class="n">rb</span><span class="p">.</span><span class="n">set</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mh">0xEEEEEEEE</span><span class="p">);</span>
+    <span class="n">rb</span><span class="p">.</span><span class="n">set</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mh">0xFFFFFFFF</span><span class="p">);</span>
+
+    <span class="n">printf</span><span class="p">(</span><span class="s">&quot;%016llX</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">,</span> <span class="n">rb</span><span class="p">.</span><span class="n">get</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">0</span><span class="p">));</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">&quot;%016llX</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">,</span> <span class="n">rb</span><span class="p">.</span><span class="n">get</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">1</span><span class="p">));</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">&quot;%016llX</span><span class="se">\n\n</span><span class="s">&quot;</span><span class="p">,</span> <span class="n">rb</span><span class="p">.</span><span class="n">get</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">2</span><span class="p">));</span>
+
+    <span class="n">rb</span><span class="p">.</span><span class="n">set</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mh">0x1111111111111111</span><span class="p">);</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">&quot;%016llX</span><span class="se">\n\n</span><span class="s">&quot;</span><span class="p">,</span> <span class="n">rb</span><span class="p">.</span><span class="n">get</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">1</span><span class="p">));</span>
+
+    <span class="n">rb</span><span class="p">.</span><span class="n">set</span><span class="o">&lt;</span><span class="kt">uint16_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mh">0x2222</span><span class="p">);</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">&quot;%016llX</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">,</span> <span class="n">rb</span><span class="p">.</span><span class="n">get</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">1</span><span class="p">));</span>
+    <span class="n">rb</span><span class="p">.</span><span class="n">set</span><span class="o">&lt;</span><span class="kt">uint16_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="mh">0x3333</span><span class="p">);</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">&quot;%016llX</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">,</span> <span class="n">rb</span><span class="p">.</span><span class="n">get</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">1</span><span class="p">));</span>
+    <span class="n">rb</span><span class="p">.</span><span class="n">set</span><span class="o">&lt;</span><span class="kt">uint16_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">7</span><span class="p">,</span> <span class="mh">0x4444</span><span class="p">);</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">&quot;%016llX</span><span class="se">\n\n</span><span class="s">&quot;</span><span class="p">,</span> <span class="n">rb</span><span class="p">.</span><span class="n">get</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">1</span><span class="p">));</span>
+
+    <span class="n">rb</span><span class="p">.</span><span class="n">set</span><span class="o">&lt;</span><span class="kt">uint8_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">8</span><span class="p">,</span> <span class="mh">0x00</span><span class="p">);</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">&quot;%016llX</span><span class="se">\n\n</span><span class="s">&quot;</span><span class="p">,</span> <span class="n">rb</span><span class="p">.</span><span class="n">get</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">1</span><span class="p">));</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>This is great and all but what about at higher optimization levels? That&#39;s where things get hairy. It&#39;s best to just completely disable gcc optimizations for this class as there <em>will</em> be problems for <code>-O2</code> and above with how this is implemented. The readability is a major factor here and we wouldn&#39;t gain a significant amount by obfuscating our code (as well as increasing the code size) to work better under higher optimization levels. </p>
+
+<h2>Conclusion</h2>
+
+<p>And that&#39;s it. Now we can treat XMM registers as a single buffer. Hopefully you found this interesting if you made it this far. If you find a good use for this technique I would love to hear from you!</p>
+
+<p>If you want to learn more about x86 or x64 assembly language check out the bottom of my import by hash post where I link to multiple resources.</p>
+
+  </div>  
+</article>
+
+      <div class="copyright">
+        <p>&copy; 2017 <a href="" title="random blog"><strong>emsea</strong></a></p>
+      </div>
+    </div>
+  </body>
+</html>
