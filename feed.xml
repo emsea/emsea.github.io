@@ -5,8 +5,8 @@
     <description>random blog</description>
     <link>/</link>
     <atom:link href="/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Sun, 31 Dec 2017 15:29:33 -0800</pubDate>
-    <lastBuildDate>Sun, 31 Dec 2017 15:29:33 -0800</lastBuildDate>
+    <pubDate>Sun, 31 Dec 2017 15:45:21 -0800</pubDate>
+    <lastBuildDate>Sun, 31 Dec 2017 15:45:21 -0800</lastBuildDate>
     <generator>Jekyll v3.6.2</generator>
     
       <item>
@@ -130,9 +130,9 @@
     &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
 &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
 &lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
-&lt;p&gt;The reason that we have be working on qwords instead of other datatypes right away is primarily because the &lt;code&gt;pinsr*&lt;/code&gt; and &lt;code&gt;pextr*&lt;/code&gt; instructions require a immediate constant offset into the specified XMM register. Currently we only need to specify &lt;code&gt;0&lt;/code&gt; or &lt;code&gt;1&lt;/code&gt; as the offset because there are only two qwords per XMM register. If we had others we would need to specify yet more offsets and have even more tests to see which exact part the user-specified &lt;code&gt;offset&lt;/code&gt; fell under. By just operating on qwords and then (as we&amp;#39;ll see in a moment) modifying the data within the obtained qwords at a higher level of abstraction, we save ourselves a lot of trouble.&lt;/p&gt;
+&lt;p&gt;The reason that we have been working on qwords instead of other datatypes right away is primarily because the &lt;code&gt;pinsr*&lt;/code&gt; and &lt;code&gt;pextr*&lt;/code&gt; instructions require an immediate constant offset into the specified XMM register. Currently we only need to specify &lt;code&gt;0&lt;/code&gt; or &lt;code&gt;1&lt;/code&gt; as the offset because there are only two qwords per XMM register. If we had more offsets because the datatype used was smaller, we would need to specify yet more offsets and have even more tests to see which exact part the user-specified &lt;code&gt;offset&lt;/code&gt; fell under. By just operating on qwords and then (as we&amp;#39;ll see in a moment) modifying the data within the obtained qwords at a higher level of abstraction, we save ourselves a lot of trouble.&lt;/p&gt;
 
-&lt;p&gt;Now that we have our support functions for getting/setting qword values, let&amp;#39;s extend that to being able to store any datatype as long as it is of byte/word/dword/qword size:&lt;/p&gt;
+&lt;p&gt;Now that we have our support functions for getting/setting qword values, let&amp;#39;s extend that to getting/setting any datatype as long as it is of byte/word/dword/qword size:&lt;/p&gt;
 &lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c++&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;register_buffer&lt;/span&gt;
 &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
 &lt;span class=&quot;k&quot;&gt;public&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;
@@ -238,6 +238,10 @@
 &lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
 &lt;p&gt;This is great and all but what about at higher optimization levels? That&amp;#39;s where things get hairy. It&amp;#39;s best to just completely disable gcc optimizations for this class as there &lt;em&gt;will&lt;/em&gt; be problems for &lt;code&gt;-O2&lt;/code&gt; and above with how this is implemented. The readability is a major factor here and we wouldn&amp;#39;t gain a significant amount by obfuscating our code (as well as increasing the code size) to work better under higher optimization levels. &lt;/p&gt;
 
+&lt;p&gt;The test program was compiled with the following command:&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;x86_64-w64-mingw32-g++ -std=c++11 -masm=intel -static-libgcc \
+                       -static-libstdc++ -o regbuf.exe main.cpp register_buffer.cpp
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
 &lt;h2&gt;Conclusion&lt;/h2&gt;
 
 &lt;p&gt;And that&amp;#39;s it. Now we can treat XMM registers as a single buffer. Hopefully you found this interesting if you made it this far. If you find a good use for this technique I would love to hear from you!&lt;/p&gt;
@@ -1046,6 +1050,7 @@ import+0x1000:
 &lt;li&gt;&lt;a href=&quot;http://mattst88.com/programming/?page=APJ&quot;&gt;Assembly Programming Journal&lt;/a&gt;&lt;/li&gt;
 &lt;li&gt;&lt;a href=&quot;http://www.agner.org/optimize/&quot;&gt;Agner Fog&amp;#39;s Software Optimization Resources&lt;/a&gt;&lt;/li&gt;
 &lt;li&gt;&lt;a href=&quot;https://www.swansontec.com/sregisters.html&quot;&gt;The Art of Picking Intel Registers&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&quot;https://eli.thegreenplace.net/2012/01/03/understanding-the-x64-code-models&quot;&gt;Understanding the x64 code models&lt;/a&gt;&lt;/li&gt;
 &lt;li&gt;&lt;a href=&quot;http://www.codemachine.com/article_x64deepdive.html&quot;&gt;X64 Deep Dive&lt;/a&gt;&lt;/li&gt;
 &lt;li&gt;&lt;a href=&quot;https://www.amazon.com/dp/0977087859&quot;&gt;x86 Instruction Set Architecture&lt;/a&gt;
 
