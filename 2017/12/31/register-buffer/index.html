@@ -77,11 +77,11 @@
 <span class="c1">; Using the same initial values as above, after this instruction executes</span>
 <span class="c1">; xmm0 = 0xAAAAAAAAAAAAAAAA0000000000000000. The immediate constant specifies</span>
 <span class="c1">; the offset multiple of the data size rather than the byte offset.</span>
-<span class="nf">pinsrq</span> <span class="nv">xmm0</span><span class="p">,</span> <span class="nb">rax</span><span class="p">,</span> <span class="mi">1</span> <span class="c1">; insert the qword value of rax into the 0th location of xmm0.</span>
+<span class="nf">pinsrq</span> <span class="nv">xmm0</span><span class="p">,</span> <span class="nb">rax</span><span class="p">,</span> <span class="mi">1</span> <span class="c1">; insert the qword value of rax into the 1*8th byte location of xmm0.</span>
 
 <span class="c1">; Last example. Assume that ebx = 0xFFFFFFFF and xmm0 is zero&#39;d out. This instruction</span>
 <span class="c1">; will produce xmm0 = 0x00000000FFFFFFFF0000000000000000 because it&#39;s putting the </span>
-<span class="c1">; dword of -1 into the 2*4=8th position in the number.</span>
+<span class="c1">; dword of -1 into the 2*4=8th byte position in the number.</span>
 <span class="nf">pinsrd</span> <span class="nv">xmm0</span><span class="p">,</span> <span class="nb">ebx</span><span class="p">,</span> <span class="mi">2</span>
 </code></pre></div>
 <p>We&#39;ll be using this instruction to insert data into our buffer. However, we will only be using the <code>pinsrq</code> size variant.</p>

@@ -5,8 +5,8 @@
     <description>random blog</description>
     <link>/</link>
     <atom:link href="/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Sun, 31 Dec 2017 16:26:06 -0800</pubDate>
-    <lastBuildDate>Sun, 31 Dec 2017 16:26:06 -0800</lastBuildDate>
+    <pubDate>Sun, 31 Dec 2017 18:30:05 -0800</pubDate>
+    <lastBuildDate>Sun, 31 Dec 2017 18:30:05 -0800</lastBuildDate>
     <generator>Jekyll v3.6.2</generator>
     
       <item>
@@ -47,11 +47,11 @@
 &lt;span class=&quot;c1&quot;&gt;; Using the same initial values as above, after this instruction executes&lt;/span&gt;
 &lt;span class=&quot;c1&quot;&gt;; xmm0 = 0xAAAAAAAAAAAAAAAA0000000000000000. The immediate constant specifies&lt;/span&gt;
 &lt;span class=&quot;c1&quot;&gt;; the offset multiple of the data size rather than the byte offset.&lt;/span&gt;
-&lt;span class=&quot;nf&quot;&gt;pinsrq&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;xmm0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt; &lt;span class=&quot;c1&quot;&gt;; insert the qword value of rax into the 0th location of xmm0.&lt;/span&gt;
+&lt;span class=&quot;nf&quot;&gt;pinsrq&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;xmm0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt; &lt;span class=&quot;c1&quot;&gt;; insert the qword value of rax into the 1*8th byte location of xmm0.&lt;/span&gt;
 
 &lt;span class=&quot;c1&quot;&gt;; Last example. Assume that ebx = 0xFFFFFFFF and xmm0 is zero&amp;#39;d out. This instruction&lt;/span&gt;
 &lt;span class=&quot;c1&quot;&gt;; will produce xmm0 = 0x00000000FFFFFFFF0000000000000000 because it&amp;#39;s putting the &lt;/span&gt;
-&lt;span class=&quot;c1&quot;&gt;; dword of -1 into the 2*4=8th position in the number.&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; dword of -1 into the 2*4=8th byte position in the number.&lt;/span&gt;
 &lt;span class=&quot;nf&quot;&gt;pinsrd&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;xmm0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;ebx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;2&lt;/span&gt;
 &lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
 &lt;p&gt;We&amp;#39;ll be using this instruction to insert data into our buffer. However, we will only be using the &lt;code&gt;pinsrq&lt;/code&gt; size variant.&lt;/p&gt;
