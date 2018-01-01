@@ -266,6 +266,28 @@
     <span class="n">printf</span><span class="p">(</span><span class="s">&quot;%016llX</span><span class="se">\n\n</span><span class="s">&quot;</span><span class="p">,</span> <span class="n">rb</span><span class="p">.</span><span class="n">get</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">1</span><span class="p">));</span>
 <span class="p">}</span>
 </code></pre></div>
+<p>Or how about something more silly? Let&#39;s store a string in there:</p>
+<div class="highlight"><pre><code class="language-c++" data-lang="c++"><span class="cp">#include</span> <span class="cpf">&lt;iostream&gt;</span><span class="cp"></span>
+<span class="cp">#include</span> <span class="cpf">&lt;cstdint&gt;</span><span class="cp"></span>
+
+<span class="cp">#include</span> <span class="cpf">&quot;register_buffer.h&quot;</span><span class="cp"></span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">()</span>
+<span class="p">{</span>
+    <span class="k">auto</span><span class="o">&amp;</span> <span class="n">rb</span> <span class="o">=</span> <span class="n">register_buffer</span><span class="o">::</span><span class="n">instance</span><span class="p">();</span>
+
+    <span class="n">std</span><span class="o">::</span><span class="n">string</span> <span class="n">input</span><span class="p">;</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">cin</span> <span class="o">&gt;&gt;</span> <span class="n">input</span><span class="p">;</span>
+
+    <span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">input</span><span class="p">.</span><span class="n">size</span><span class="p">()</span> <span class="o">&amp;&amp;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">rb</span><span class="p">.</span><span class="n">size</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">rb</span><span class="p">.</span><span class="n">set</span><span class="o">&lt;</span><span class="kt">char</span><span class="o">&gt;</span><span class="p">(</span><span class="n">i</span><span class="p">,</span> <span class="n">input</span><span class="p">[</span><span class="n">i</span><span class="p">]);</span>
+    <span class="p">}</span>
+
+    <span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">input</span><span class="p">.</span><span class="n">size</span><span class="p">();</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="n">rb</span><span class="p">.</span><span class="n">get</span><span class="o">&lt;</span><span class="kt">char</span><span class="o">&gt;</span><span class="p">(</span><span class="n">i</span><span class="p">);</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
 <p>This is great and all but what about at higher optimization levels? That&#39;s where things get hairy. It&#39;s best to just completely disable gcc optimizations for this class as there <em>will</em> be problems for <code>-O2</code> and above with how this is implemented. The readability is a major factor here and we wouldn&#39;t gain a significant amount by obfuscating our code (as well as increasing the code size) to work better under higher optimization levels. </p>
 
 <p>A commenter <a href="https://news.ycombinator.com/item?id=16044698">pointed out on the Hacker News post</a> that inline assembly shouldn&#39;t be split up around the code as shown here. That is true and if you were to actually use this idea (for some reason) you should be more careful with how the compiler clobbers registers or assumes registers to contain certain values. For this article I think that it&#39;s best to demonstrate the concept rather than write the most correct code.</p>
