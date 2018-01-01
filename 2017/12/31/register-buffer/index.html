@@ -117,7 +117,7 @@
     <span class="k">return</span> <span class="n">buf_data</span><span class="p">;</span>
 <span class="p">}</span>
 </code></pre></div>
-<p>For the above function work we need to be able to move the value of the XMM register corresponding to the requested <code>offset</code> into <code>XMM0</code>. This is easy enough using integer division to find the exact register that holds the data we need:</p>
+<p>For the above function to work we need to be able to move the value of the XMM register corresponding to the requested <code>offset</code> into <code>XMM0</code>. This is easy enough using integer division to find the exact register that holds the data we need:</p>
 <div class="highlight"><pre><code class="language-c++" data-lang="c++"><span class="kt">void</span> <span class="n">register_buffer</span><span class="o">::</span><span class="n">get_reg_in_xmm0</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span> <span class="n">offset</span><span class="p">)</span> <span class="p">{</span>
     <span class="k">switch</span><span class="p">(</span><span class="n">offset</span> <span class="o">/</span> <span class="mi">16</span><span class="p">)</span> <span class="p">{</span>
         <span class="k">case</span> <span class="mi">0</span><span class="o">:</span> <span class="k">asm</span><span class="p">(</span><span class="s">&quot;movdqa xmm0, xmm6&quot;</span><span class="p">);</span>  <span class="k">break</span><span class="p">;</span>
