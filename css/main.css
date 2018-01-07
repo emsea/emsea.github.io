@@ -171,7 +171,7 @@ hr {
 .site-header {
   border-bottom: 1px solid #eaeaea;
   margin-top: -2rem;
-  max-width: 60rem; }
+  max-width: 56rem; }
   .site-header p {
     font-size: 0.875rem; }
 
@@ -197,14 +197,14 @@ hr {
   padding: 2rem 1.5rem;
   margin: auto;
   box-sizing: border-box;
-  max-width: 60rem; }
+  max-width: 56rem; }
 
 /**
  * Pages
  */
 .home section + section {
   margin-top: 2rem;
-  max-width: 60rem; }
+  max-width: 56rem; }
 
 .post-list > li {
   margin-bottom: 0.5rem;
