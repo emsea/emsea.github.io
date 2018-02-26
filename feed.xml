@@ -5,8 +5,8 @@
     <description>random blog</description>
     <link>/</link>
     <atom:link href="/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Sat, 06 Jan 2018 16:11:49 -0800</pubDate>
-    <lastBuildDate>Sat, 06 Jan 2018 16:11:49 -0800</lastBuildDate>
+    <pubDate>Sun, 25 Feb 2018 16:38:24 -0800</pubDate>
+    <lastBuildDate>Sun, 25 Feb 2018 16:38:24 -0800</lastBuildDate>
     <generator>Jekyll v3.6.2</generator>
     
       <item>
@@ -919,7 +919,9 @@ import+0x1000:
 &lt;span class=&quot;c1&quot;&gt;; export directory. We need to get the address of the function corresponding &lt;/span&gt;
 &lt;span class=&quot;c1&quot;&gt;; to the name of the current export string&lt;/span&gt;
 &lt;span class=&quot;nl&quot;&gt;.get_export_addr:&lt;/span&gt;
-    &lt;span class=&quot;c1&quot;&gt;; We don&amp;#39;t want any leftover junk in the upper bits of eax&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; We don&amp;#39;t want any leftover junk in the upper bits of eax. We can eliminate&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; this extraneous instruction and save a byte using the movzx instruction...&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; can you figure out how? ;)&lt;/span&gt;
     &lt;span class=&quot;nf&quot;&gt;xor&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;
 
     &lt;span class=&quot;c1&quot;&gt;; Get the index into AddressOfNameOrdinals from rcx which is the current&lt;/span&gt;

@@ -672,7 +672,9 @@ import+0x1000:
 <span class="c1">; export directory. We need to get the address of the function corresponding </span>
 <span class="c1">; to the name of the current export string</span>
 <span class="nl">.get_export_addr:</span>
-    <span class="c1">; We don&#39;t want any leftover junk in the upper bits of eax</span>
+    <span class="c1">; We don&#39;t want any leftover junk in the upper bits of eax. We can eliminate</span>
+    <span class="c1">; this extraneous instruction and save a byte using the movzx instruction...</span>
+    <span class="c1">; can you figure out how? ;)</span>
     <span class="nf">xor</span> <span class="nb">eax</span><span class="p">,</span> <span class="nb">eax</span>
 
     <span class="c1">; Get the index into AddressOfNameOrdinals from rcx which is the current</span>
