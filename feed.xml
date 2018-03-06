@@ -5,8 +5,8 @@
     <description>random blog</description>
     <link>/</link>
     <atom:link href="/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Sun, 25 Feb 2018 16:38:24 -0800</pubDate>
-    <lastBuildDate>Sun, 25 Feb 2018 16:38:24 -0800</lastBuildDate>
+    <pubDate>Tue, 06 Mar 2018 02:02:24 -0800</pubDate>
+    <lastBuildDate>Tue, 06 Mar 2018 02:02:24 -0800</lastBuildDate>
     <generator>Jekyll v3.6.2</generator>
     
       <item>
@@ -25,7 +25,7 @@
 
 &lt;h2&gt;XMM Registers&lt;/h2&gt;
 
-&lt;p&gt;There are 16 individual 16-byte wide XMM registers which are meant to be used for &lt;a href=&quot;https://en.wikipedia.org/wiki/SIMD&quot;&gt;SIMD&lt;/a&gt; and floating point operations. We won&amp;#39;t be using them for their intended reason and instead just want to use their bytes as storage space. The Microsoft &lt;a href=&quot;https://msdn.microsoft.com/en-us/library/ms235286.aspx&quot;&gt;x64 ABI&lt;/a&gt; treats &lt;code&gt;XMM0&lt;/code&gt;-&lt;code&gt;XMM5&lt;/code&gt; as volatile registers which aren&amp;#39;t preserved between function calls and are used to pass &lt;code&gt;double&lt;/code&gt;s to functions and perform floating point opeartions (&lt;a href=&quot;https://en.wikipedia.org/wiki/X87&quot;&gt;x87&lt;/a&gt; is all but deprecated these days) among other things. However, registers &lt;code&gt;XMM6&lt;/code&gt;-&lt;code&gt;XMM15&lt;/code&gt; are required to be preserved by the callee. We&amp;#39;ll be using these registers to form our buffer so that we won&amp;#39;t have to worry about functions inadvertently clobbering our bytes. If a function decides to use one of our buffer registers it will have to save/restore it using the stack per the rules of the ABI. This sort of makes the title of this post a misnomer but the kernel also saves our registers on context switch so RAM cannot be completely avoided. We&amp;#39;re just having fun in the end anyway. &lt;/p&gt;
+&lt;p&gt;There are 16 individual 16-byte wide XMM registers which are meant to be used for &lt;a href=&quot;https://en.wikipedia.org/wiki/SIMD&quot;&gt;SIMD&lt;/a&gt; and floating point operations. We won&amp;#39;t be using them for their intended reason and instead just want to use their bytes as storage space. The Microsoft &lt;a href=&quot;https://msdn.microsoft.com/en-us/library/ms235286.aspx&quot;&gt;x64 ABI&lt;/a&gt; treats &lt;code&gt;XMM0&lt;/code&gt;-&lt;code&gt;XMM5&lt;/code&gt; as volatile registers which aren&amp;#39;t preserved between function calls and are used to pass &lt;code&gt;double&lt;/code&gt;s to functions and perform floating point operations (&lt;a href=&quot;https://en.wikipedia.org/wiki/X87&quot;&gt;x87&lt;/a&gt; is all but deprecated these days) among other things. However, registers &lt;code&gt;XMM6&lt;/code&gt;-&lt;code&gt;XMM15&lt;/code&gt; are required to be preserved by the callee. We&amp;#39;ll be using these registers to form our buffer so that we won&amp;#39;t have to worry about functions inadvertently clobbering our bytes. If a function decides to use one of our buffer registers it will have to save/restore it using the stack per the rules of the ABI. This sort of makes the title of this post a misnomer but the kernel also saves our registers on context switch so RAM cannot be completely avoided. We&amp;#39;re just having fun in the end anyway. &lt;/p&gt;
 
 &lt;p&gt;Since we&amp;#39;ll be using &lt;code&gt;XMM6&lt;/code&gt;-&lt;code&gt;XMM15&lt;/code&gt; that gives us &lt;code&gt;10 registers * 16 bytes = 160 bytes&lt;/code&gt; to play with in our buffer. But how do we manipulate the bytes in our buffer? There are a few instructions that will come in handy:&lt;/p&gt;
 
