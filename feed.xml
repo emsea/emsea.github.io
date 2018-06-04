@@ -5,8 +5,8 @@
     <description>random blog</description>
     <link>/</link>
     <atom:link href="/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Mon, 04 Jun 2018 02:00:27 -0700</pubDate>
-    <lastBuildDate>Mon, 04 Jun 2018 02:00:27 -0700</lastBuildDate>
+    <pubDate>Mon, 04 Jun 2018 02:04:13 -0700</pubDate>
+    <lastBuildDate>Mon, 04 Jun 2018 02:04:13 -0700</lastBuildDate>
     <generator>Jekyll v3.6.2</generator>
     
       <item>
@@ -35,7 +35,7 @@ uxtheme!IMAGE_SECTION_HEADER
 
 &lt;h2&gt;Solution&lt;/h2&gt;
 
-&lt;p&gt;One solution would be to use the top of the stack (upper limit) as a place to store your data. Since the Windows loader will allocate pages for the stack of your main thread when your process is initialized, we can tell the loader to allocate a little extra for us to use for general purpose data storage.&lt;/p&gt;
+&lt;p&gt;One solution would be to use the very top of the allocated stack region (upper limit) as a place to store your data. Since the Windows loader will allocate pages for the stack of your main thread when your process is initialized, we can tell the loader to allocate a little extra for us to use for general purpose data storage.&lt;/p&gt;
 
 &lt;p&gt;&lt;img src=&quot;/img/stack1.png&quot; alt=&quot;Target stack layout&quot;&gt;&lt;/p&gt;
 

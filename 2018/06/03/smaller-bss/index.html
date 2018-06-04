@@ -63,7 +63,7 @@ uxtheme!IMAGE_SECTION_HEADER
 
 <h2>Solution</h2>
 
-<p>One solution would be to use the top of the stack (upper limit) as a place to store your data. Since the Windows loader will allocate pages for the stack of your main thread when your process is initialized, we can tell the loader to allocate a little extra for us to use for general purpose data storage.</p>
+<p>One solution would be to use the very top of the allocated stack region (upper limit) as a place to store your data. Since the Windows loader will allocate pages for the stack of your main thread when your process is initialized, we can tell the loader to allocate a little extra for us to use for general purpose data storage.</p>
 
 <p><img src="/img/stack1.png" alt="Target stack layout"></p>
 
