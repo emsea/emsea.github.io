@@ -5,8 +5,8 @@
     <description>random blog</description>
     <link>/</link>
     <atom:link href="/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Mon, 04 Jun 2018 11:04:37 -0700</pubDate>
-    <lastBuildDate>Mon, 04 Jun 2018 11:04:37 -0700</lastBuildDate>
+    <pubDate>Mon, 04 Jun 2018 11:09:49 -0700</pubDate>
+    <lastBuildDate>Mon, 04 Jun 2018 11:09:49 -0700</lastBuildDate>
     <generator>Jekyll v3.6.2</generator>
     
       <item>
@@ -130,7 +130,9 @@ uxtheme!IMAGE_OPTIONAL_HEADER
 &lt;span class=&quot;c1&quot;&gt;; done like: (rax &amp;amp; ~(PAGE_SIZE - 1)). Because pages are normally 4 KB in&lt;/span&gt;
 &lt;span class=&quot;c1&quot;&gt;; size their hex representation is 1000h. To align to 4 KB boundaries we&lt;/span&gt;
 &lt;span class=&quot;c1&quot;&gt;; have to clear the bottom 3 nybbles which is 4*3 = 12 least significant&lt;/span&gt;
-&lt;span class=&quot;c1&quot;&gt;; bits to zero.&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; bits to zero. We could also accomlish the alignment with shr and then&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; immediately doing a shl to clear out the bottom 12 bits but it ends up&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; being the same size as the single and instruction.&lt;/span&gt;
 &lt;span class=&quot;nf&quot;&gt;and&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;not&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;PAGE_SIZE&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
 
 &lt;span class=&quot;c1&quot;&gt;; Now we have the base address of the last page in our committed stack&lt;/span&gt;

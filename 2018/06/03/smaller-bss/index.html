@@ -158,7 +158,9 @@ uxtheme!IMAGE_OPTIONAL_HEADER
 <span class="c1">; done like: (rax &amp; ~(PAGE_SIZE - 1)). Because pages are normally 4 KB in</span>
 <span class="c1">; size their hex representation is 1000h. To align to 4 KB boundaries we</span>
 <span class="c1">; have to clear the bottom 3 nybbles which is 4*3 = 12 least significant</span>
-<span class="c1">; bits to zero.</span>
+<span class="c1">; bits to zero. We could also accomlish the alignment with shr and then</span>
+<span class="c1">; immediately doing a shl to clear out the bottom 12 bits but it ends up</span>
+<span class="c1">; being the same size as the single and instruction.</span>
 <span class="nf">and</span> <span class="nb">rax</span><span class="p">,</span> <span class="nv">not</span> <span class="p">(</span><span class="nv">PAGE_SIZE</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
 
 <span class="c1">; Now we have the base address of the last page in our committed stack</span>
