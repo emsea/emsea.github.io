@@ -173,7 +173,7 @@ uxtheme!IMAGE_OPTIONAL_HEADER
 
 <h2>Conclusion</h2>
 
-<p>That&#39;s it! 15 bytes of machine code to get the TOS in <code>rax</code>. From here in fasm if you want to have multiple uninitialized values you can create a struct using the <a href="https://flatassembler.net/docs.php?article=win32">windows includes</a> <code>struct</code> macro:</p>
+<p>That&#39;s it! 15 bytes of machine code to get the TOS in <code>rax</code>. You could have allocated from the heap to do something similar but it would have ended up costing more bytes depending on your use case. From here in fasm if you want to have multiple uninitialized values you can create a struct using the <a href="https://flatassembler.net/docs.php?article=win32">windows includes</a> <code>struct</code> macro:</p>
 <div class="highlight"><pre><code class="language-nasm" data-lang="nasm"><span class="k">struc</span><span class="nv">t</span> <span class="nv">BSS</span>
     <span class="nf">Var1</span> <span class="nv">dd</span> <span class="nv">?</span>
     <span class="nf">Var2</span> <span class="nv">dw</span> <span class="nv">?</span>

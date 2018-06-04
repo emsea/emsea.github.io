@@ -5,8 +5,8 @@
     <description>random blog</description>
     <link>/</link>
     <atom:link href="/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Sun, 03 Jun 2018 22:38:20 -0700</pubDate>
-    <lastBuildDate>Sun, 03 Jun 2018 22:38:20 -0700</lastBuildDate>
+    <pubDate>Sun, 03 Jun 2018 22:53:05 -0700</pubDate>
+    <lastBuildDate>Sun, 03 Jun 2018 22:53:05 -0700</lastBuildDate>
     <generator>Jekyll v3.6.2</generator>
     
       <item>
@@ -145,7 +145,7 @@ uxtheme!IMAGE_OPTIONAL_HEADER
 
 &lt;h2&gt;Conclusion&lt;/h2&gt;
 
-&lt;p&gt;That&amp;#39;s it! 15 bytes of machine code to get the TOS in &lt;code&gt;rax&lt;/code&gt;. From here in fasm if you want to have multiple uninitialized values you can create a struct using the &lt;a href=&quot;https://flatassembler.net/docs.php?article=win32&quot;&gt;windows includes&lt;/a&gt; &lt;code&gt;struct&lt;/code&gt; macro:&lt;/p&gt;
+&lt;p&gt;That&amp;#39;s it! 15 bytes of machine code to get the TOS in &lt;code&gt;rax&lt;/code&gt;. You could have allocated from the heap to do something similar but it would have ended up costing more bytes depending on your use case. From here in fasm if you want to have multiple uninitialized values you can create a struct using the &lt;a href=&quot;https://flatassembler.net/docs.php?article=win32&quot;&gt;windows includes&lt;/a&gt; &lt;code&gt;struct&lt;/code&gt; macro:&lt;/p&gt;
 &lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-nasm&quot; data-lang=&quot;nasm&quot;&gt;&lt;span class=&quot;k&quot;&gt;struc&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;t&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;BSS&lt;/span&gt;
     &lt;span class=&quot;nf&quot;&gt;Var1&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;dd&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;?&lt;/span&gt;
     &lt;span class=&quot;nf&quot;&gt;Var2&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;dw&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;?&lt;/span&gt;
