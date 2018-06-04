@@ -41,7 +41,7 @@
   <div class="post-content" itemprop="articleBody">
     <h2>Problem</h2>
 
-<p><code>.bss</code> (<a href="https://en.wikipedia.org/wiki/.bss">Byte Saving Section</a> 😉) sections are extremely useful for saving on size when dealing with uninitialized data. However in tiny executables where every byte coutes they can take up more space in the binary than you might want.</p>
+<p><code>.bss</code> (<a href="https://en.wikipedia.org/wiki/.bss">Byte Saving Section</a> 😉) sections are extremely useful for saving on size when dealing with uninitialized data. However in tiny executables where every byte counts they can take up more space in the binary than you might want.</p>
 
 <p>Consider an entry in your PE&#39;s section table:</p>
 <div class="highlight"><pre><code class="language-text" data-lang="text">&gt; dt -r IMAGE_SECTION_HEADER

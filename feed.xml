@@ -5,15 +5,15 @@
     <description>random blog</description>
     <link>/</link>
     <atom:link href="/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Mon, 04 Jun 2018 02:04:13 -0700</pubDate>
-    <lastBuildDate>Mon, 04 Jun 2018 02:04:13 -0700</lastBuildDate>
+    <pubDate>Mon, 04 Jun 2018 11:04:37 -0700</pubDate>
+    <lastBuildDate>Mon, 04 Jun 2018 11:04:37 -0700</lastBuildDate>
     <generator>Jekyll v3.6.2</generator>
     
       <item>
         <title>Saving Space When Saving Space</title>
         <description>&lt;h2&gt;Problem&lt;/h2&gt;
 
-&lt;p&gt;&lt;code&gt;.bss&lt;/code&gt; (&lt;a href=&quot;https://en.wikipedia.org/wiki/.bss&quot;&gt;Byte Saving Section&lt;/a&gt; 😉) sections are extremely useful for saving on size when dealing with uninitialized data. However in tiny executables where every byte coutes they can take up more space in the binary than you might want.&lt;/p&gt;
+&lt;p&gt;&lt;code&gt;.bss&lt;/code&gt; (&lt;a href=&quot;https://en.wikipedia.org/wiki/.bss&quot;&gt;Byte Saving Section&lt;/a&gt; 😉) sections are extremely useful for saving on size when dealing with uninitialized data. However in tiny executables where every byte counts they can take up more space in the binary than you might want.&lt;/p&gt;
 
 &lt;p&gt;Consider an entry in your PE&amp;#39;s section table:&lt;/p&gt;
 &lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;&amp;gt; dt -r IMAGE_SECTION_HEADER
