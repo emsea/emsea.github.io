@@ -5,9 +5,170 @@
     <description>random blog</description>
     <link>/</link>
     <atom:link href="/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Tue, 06 Mar 2018 02:02:24 -0800</pubDate>
-    <lastBuildDate>Tue, 06 Mar 2018 02:02:24 -0800</lastBuildDate>
+    <pubDate>Sun, 03 Jun 2018 22:38:20 -0700</pubDate>
+    <lastBuildDate>Sun, 03 Jun 2018 22:38:20 -0700</lastBuildDate>
     <generator>Jekyll v3.6.2</generator>
+    
+      <item>
+        <title>Saving Space When Saving Space</title>
+        <description>&lt;h2&gt;Problem&lt;/h2&gt;
+
+&lt;p&gt;&lt;code&gt;.bss&lt;/code&gt; (&lt;a href=&quot;https://en.wikipedia.org/wiki/.bss&quot;&gt;Byte Saving Section&lt;/a&gt; 😉) sections are extremely useful for saving on size when dealing with uninitialized data. However in tiny executables where every byte coutes they can take up more space in the binary than you might want.&lt;/p&gt;
+
+&lt;p&gt;Consider an entry in your PE&amp;#39;s section table:&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;&amp;gt; dt -r IMAGE_SECTION_HEADER
+uxtheme!IMAGE_SECTION_HEADER
+   +0x000 Name             : [8] UChar
+   +0x008 Misc             : _IMAGE_SECTION_HEADER::&amp;lt;unnamed-type-Misc&amp;gt;
+      +0x000 PhysicalAddress  : Uint4B
+      +0x000 VirtualSize      : Uint4B
+   +0x00c VirtualAddress   : Uint4B
+   +0x010 SizeOfRawData    : Uint4B
+   +0x014 PointerToRawData : Uint4B
+   +0x018 PointerToRelocations : Uint4B
+   +0x01c PointerToLinenumbers : Uint4B
+   +0x020 NumberOfRelocations : Uint2B
+   +0x022 NumberOfLinenumbers : Uint2B
+   +0x024 Characteristics  : Uint4B
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;That&amp;#39;s 36 bytes of header to describe a section table entry for your uninitialized data. Can we do better if we just want a place to stuff our uninitialized data?&lt;/p&gt;
+
+&lt;h2&gt;Solution&lt;/h2&gt;
+
+&lt;p&gt;One solution would be to use the top of the stack (TOS) as a place to store your data. Since the Windows loader will allocate pages for the stack of your main thread when your process is initialized, we can tell the loader to allocate a little extra for us to use for general purpose data storage.&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;/img/stack1.png&quot; alt=&quot;Target stack layout&quot;&gt;&lt;/p&gt;
+
+&lt;p&gt;To do this you have to take into consideration how Windows allocates memory for thread stacks.&lt;/p&gt;
+
+&lt;h3&gt;Thread stacks and guard pages&lt;/h3&gt;
+
+&lt;p&gt;The default stack size that most compilers and assemblers will specify to be reserved in your PE headers is going to be 1 MB. However the entire 1 MB of stack space isn&amp;#39;t going to be usable all at once. The 1 MB portion of your process&amp;#39; address space is &lt;em&gt;reserved&lt;/em&gt; meaning that there can be no other allocations that overlap that consecutive region but there is no backing page frame for the region in physical memory. To actually use the pages in that reserved region you have to &lt;em&gt;commit&lt;/em&gt; the pages you want to use. This will locate free pages in physical memory to fill into the corresponding page table entries and reserve space in the page file should the pages need to be paged out. By default the first page at the bottom of the stack (BOS) is committed and immediately usable before your entry point is called by the loader.&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;/img/stack2.png&quot; alt=&quot;Reserved stack memory&quot;&gt;&lt;/p&gt;
+
+&lt;p&gt;How do the number of committed stack pages grow so that we can use the necessary memory as &lt;code&gt;rsp&lt;/code&gt; grows in the direction of the TOS? That&amp;#39;s the job of the stack guard page. Guard pages are special pages that will trigger an exception when accessed. You can register handler functions for these exceptions and do processing based on who touched the guarded page. In the case of a stack guard page, Windows will catch this exception, commit the page on demand, and make the subsequent stack page the next guard page. This allows the OS to not use physical memory for stacks unless absolutely needed. Why would this be needed? Imagine a process which has hundreds or even thousands of threads which all have stacks that are multiple megabytes. This can get expensive very quickly and committing on demand can help in saving physical memory. Once a page has been committed and the stack shrinks above it, it will not be uncomitted.&lt;/p&gt;
+
+&lt;p&gt;Implementing a guard page feature in an OS is fairly straightforward as all pages in the guard region need to be set as invalid in the page tables. On access, the kernel page fault handler can look in either the page tables or a data structure describing regions of the virtual address space to see if the page is really invalid and triggering an application exception, or if a callback needs to be fired off.&lt;/p&gt;
+
+&lt;p&gt;An interesting caveat of having stack guard pages arises when one wants to allocate a buffer on the stack greater than the guard page region:&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;/img/stack3.png&quot; alt=&quot;Stack guard page&quot;&gt;&lt;/p&gt;
+
+&lt;p&gt;As you can see, this would skip the guard page if the required stack region hasn&amp;#39;t been committed before. For this reason, MSVC will implicitly call &lt;a href=&quot;https://msdn.microsoft.com/en-us/library/ms648426(v=vs.85).aspx&quot;&gt;&lt;code&gt;_chkstk&lt;/code&gt;&lt;/a&gt; for large stack allocations behind the scenes to &lt;em&gt;probe&lt;/em&gt; the stack and touch as many guard pages as necessary to make sure there is enough committed memory for the buffer.&lt;/p&gt;
+
+&lt;p&gt;All this to say, if we tried to blindly use the extra stack memory at the TOS we requested it wouldn&amp;#39;t be committed and segfault our process. Now that we understand the difference between memory being reserved and committed, this is a non-issue as we are able to specify to the loader how much of our stack we want to commit before our entry point is called.&lt;/p&gt;
+
+&lt;h3&gt;Updating PE header stack sizes&lt;/h3&gt;
+
+&lt;p&gt;We want to change the amount of memory that is both reserved and committed for our stack in our binary&amp;#39;s PE headers. To do this we need to alter the two fields in &lt;code&gt;IMAGE_OPTIONAL_HEADER&lt;/code&gt; shown below:&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;&amp;gt; dt IMAGE_OPTIONAL_HEADER 
+uxtheme!IMAGE_OPTIONAL_HEADER
+...
+   +0x048 SizeOfStackReserve : Uint8B
+   +0x050 SizeOfStackCommit : Uint8B
+...
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;If you are trying to squeeze every last byte out of your files you are probably building your PE headers manually. Take note of the &lt;code&gt;SizeOfStackReserve&lt;/code&gt; and &lt;code&gt;SizeOfStackCommit&lt;/code&gt; fields are assigned to the same value:&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-nasm&quot; data-lang=&quot;nasm&quot;&gt;&lt;span class=&quot;c1&quot;&gt;; Commit 2 MB of virtual address space for the stack instead of the&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; normal 1 MB default. We&amp;#39;ll use the upper meg for data storage&lt;/span&gt;
+&lt;span class=&quot;no&quot;&gt;STACK_COMMIT&lt;/span&gt;&lt;span class=&quot;kd&quot;&gt; equ&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;0x200000&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; ...&lt;/span&gt;
+&lt;span class=&quot;nl&quot;&gt;IMAGE_OPTIONAL_HEADER:&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;IMAGE_NT_OPTIONAL_HDR64_MAGIC&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;20Bh&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;IMAGE_SUBSYSTEM_WINDOWS_GUI&lt;/span&gt;   &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;2&lt;/span&gt; 
+
+    &lt;span class=&quot;nf&quot;&gt;.Magic&lt;/span&gt;                      &lt;span class=&quot;nv&quot;&gt;dw&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;IMAGE_NT_OPTIONAL_HDR64_MAGIC&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.MajorLinkerVersion&lt;/span&gt;         &lt;span class=&quot;nv&quot;&gt;db&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.MinorLinkerVersion&lt;/span&gt;         &lt;span class=&quot;nv&quot;&gt;db&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.SizeOfCode&lt;/span&gt;                 &lt;span class=&quot;nv&quot;&gt;dd&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.SizeOfInitializedData&lt;/span&gt;      &lt;span class=&quot;nv&quot;&gt;dd&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;0C0h&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.SizeOfUninitializedData&lt;/span&gt;    &lt;span class=&quot;nv&quot;&gt;dd&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.AddressOfEntryPoint&lt;/span&gt;        &lt;span class=&quot;nv&quot;&gt;dd&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;begin&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.BaseOfCode&lt;/span&gt;                 &lt;span class=&quot;nv&quot;&gt;dd&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;IMAGE_NT_HEADERS&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.ImageBase&lt;/span&gt;                  &lt;span class=&quot;nv&quot;&gt;dq&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;140000000h&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.SectionAlignment&lt;/span&gt;           &lt;span class=&quot;nv&quot;&gt;dd&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;10h&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.FileAlignment&lt;/span&gt;              &lt;span class=&quot;nv&quot;&gt;dd&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;10h&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.MajorOperatingSystemVer&lt;/span&gt;    &lt;span class=&quot;nv&quot;&gt;dw&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;5&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.MinorOperatingSystemVer&lt;/span&gt;    &lt;span class=&quot;nv&quot;&gt;dw&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;2&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.MajorImageVersion&lt;/span&gt;          &lt;span class=&quot;nv&quot;&gt;dw&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.MinorImageVersion&lt;/span&gt;          &lt;span class=&quot;nv&quot;&gt;dw&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.MajorSubsystemVersion&lt;/span&gt;      &lt;span class=&quot;nv&quot;&gt;dw&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;5&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.MinorSubsystemVersion&lt;/span&gt;      &lt;span class=&quot;nv&quot;&gt;dw&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;2&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.Win32VersionValue&lt;/span&gt;          &lt;span class=&quot;nv&quot;&gt;dd&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.SizeOfImage&lt;/span&gt;                &lt;span class=&quot;nv&quot;&gt;dd&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;end_file&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.SizeOfHeaders&lt;/span&gt;              &lt;span class=&quot;nv&quot;&gt;dd&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;begin&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.CheckSum&lt;/span&gt;                   &lt;span class=&quot;nv&quot;&gt;dd&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.Subsystem&lt;/span&gt;                  &lt;span class=&quot;nv&quot;&gt;dw&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;IMAGE_SUBSYSTEM_WINDOWS_GUI&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.DllCharacteristics&lt;/span&gt;         &lt;span class=&quot;nv&quot;&gt;dw&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.SizeOfStackReserve&lt;/span&gt;         &lt;span class=&quot;nv&quot;&gt;dq&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;STACK_COMMIT&lt;/span&gt;     &lt;span class=&quot;c1&quot;&gt;; ATTENTION&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.SizeOfStackCommit&lt;/span&gt;          &lt;span class=&quot;nv&quot;&gt;dq&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;STACK_COMMIT&lt;/span&gt;     &lt;span class=&quot;c1&quot;&gt;; ATTENTION&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.SizeOfHeapReserve&lt;/span&gt;          &lt;span class=&quot;nv&quot;&gt;dq&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;100000h&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.SizeOfHeapCommit&lt;/span&gt;           &lt;span class=&quot;nv&quot;&gt;dq&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;1000h&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.LoaderFlags&lt;/span&gt;                &lt;span class=&quot;nv&quot;&gt;dd&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;.NumberOfRvaAndSizes&lt;/span&gt;        &lt;span class=&quot;nv&quot;&gt;dd&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; ...&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;Note that the above header definition can be made even smaller with various methods that will be discussed in a later article. If you aren&amp;#39;t building your headers manually or are using something like a packer or &lt;a href=&quot;http://www.crinkler.net/&quot;&gt;compressing linker&lt;/a&gt; then you can use the trusty &lt;a href=&quot;https://msdn.microsoft.com/en-us/library/35yc2tc3.aspx&quot;&gt;&lt;code&gt;editbin&lt;/code&gt; to change &lt;code&gt;SizeOfStackReserve&lt;/code&gt; and &lt;code&gt;SizeOfStackCommit&lt;/code&gt;&lt;/a&gt;:&lt;/p&gt;
+
+&lt;p&gt;This will make our stack look like the following:&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;/img/stack4.png&quot; alt=&quot;Fully committed stack&quot;&gt;&lt;/p&gt;
+
+&lt;p&gt;Additionally, the stack is larger than before and we can start storing data in the newly committed upper area. If there is concern of the stack growing into our uninitialized data block we can always bump up the reserved/committed stack size though deep stacks can be indicators of poor program design.&lt;/p&gt;
+
+&lt;h3&gt;Locating the TOS&lt;/h3&gt;
+
+&lt;p&gt;Now that our stack is correctly initialized at load time it&amp;#39;s not difficult to locate the TOS to start placing our data in the newly committed space:&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-nasm&quot; data-lang=&quot;nasm&quot;&gt;&lt;span class=&quot;nf&quot;&gt;PAGE_SIZE&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;1000h&lt;/span&gt;
+
+&lt;span class=&quot;c1&quot;&gt;; We first want to copy the current stack pointer into rax so that we can &lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; change it&lt;/span&gt;
+&lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rsp&lt;/span&gt;
+
+&lt;span class=&quot;c1&quot;&gt;; We then want to align to the nearest page boundary. This is normally&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; done like: (rax &amp;amp; ~(PAGE_SIZE - 1)). Because pages are normally 4 KB in&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; size their hex representation is 1000h. To align to 4 KB boundaries we&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; have to clear the bottom 3 nybbles which is 4*3 = 12 least significant&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; bits to zero.&lt;/span&gt;
+&lt;span class=&quot;nf&quot;&gt;and&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;not&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;PAGE_SIZE&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+
+&lt;span class=&quot;c1&quot;&gt;; Now we have the base address of the last page in our committed stack&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; region in our process address space. We want to get to the start of &lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; our committed region which we know is of STACK_COMMIT size. All we &lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; have to do then is move rax STACK_COMMIT right? No, since we&amp;#39;re not&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; at the very end of the region and at the base of the last page, we have&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; to roll back (STACK_COMMIT - PAGE_SIZE) to not overshoot our destination :)&lt;/span&gt;
+&lt;span class=&quot;nf&quot;&gt;sub&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;STACK_COMMIT&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;PAGE_SIZE&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;And there we have it, the TOS is now going to be in &lt;code&gt;rax&lt;/code&gt;. We need to first align to the nearest page as we aren&amp;#39;t sure exactly where in the BOS page we are after being called by the loader as part of process initialization on Windows runs in user mode on the main thread. We can now store as much data as we feel comfortable in at the top of the stack.&lt;/p&gt;
+
+&lt;h2&gt;Conclusion&lt;/h2&gt;
+
+&lt;p&gt;That&amp;#39;s it! 15 bytes of machine code to get the TOS in &lt;code&gt;rax&lt;/code&gt;. From here in fasm if you want to have multiple uninitialized values you can create a struct using the &lt;a href=&quot;https://flatassembler.net/docs.php?article=win32&quot;&gt;windows includes&lt;/a&gt; &lt;code&gt;struct&lt;/code&gt; macro:&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-nasm&quot; data-lang=&quot;nasm&quot;&gt;&lt;span class=&quot;k&quot;&gt;struc&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;t&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;BSS&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;Var1&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;dd&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;?&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;Var2&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;dw&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;?&lt;/span&gt;
+    &lt;span class=&quot;nf&quot;&gt;Var3&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;dw&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;?&lt;/span&gt;
+&lt;span class=&quot;nf&quot;&gt;ends&lt;/span&gt;
+
+&lt;span class=&quot;c1&quot;&gt;; ...&lt;/span&gt;
+
+&lt;span class=&quot;c1&quot;&gt;; rax = base of uninitialize data area&lt;/span&gt;
+&lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;BSS.Var1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;],&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;123&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;If you have a method to get the TOS in fewer bytes please contact me!&lt;/p&gt;
+</description>
+        <pubDate>Sun, 03 Jun 2018 00:00:00 -0700</pubDate>
+        <link>/2018/06/03/smaller-bss/</link>
+        <guid isPermaLink="true">/2018/06/03/smaller-bss/</guid>
+        
+        <category>assembly</category>
+        
+        <category>Windows</category>
+        
+        
+      </item>
     
       <item>
         <title>RAM-less Buffers</title>
@@ -1121,7 +1282,7 @@ import+0x1000:
   &lt;span class=&quot;nl&quot;&gt;find_kernel32:&lt;/span&gt;
     &lt;span class=&quot;nf&quot;&gt;.alloc_granularity&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;10000h&lt;/span&gt;
 
-    &lt;span class=&quot;c1&quot;&gt;; Obtain base of kernel32.dll in RBX&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; Obtain base of kernel32.dll in rbx&lt;/span&gt;
     &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;rsp&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;  &lt;span class=&quot;c1&quot;&gt;; return address to kernel32 loader function&lt;/span&gt;
     &lt;span class=&quot;nf&quot;&gt;xor&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;bx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;bx&lt;/span&gt;      &lt;span class=&quot;c1&quot;&gt;; align address to 64k boundaries (allocation granularity)&lt;/span&gt;
     &lt;span class=&quot;nf&quot;&gt;sub&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;.alloc_granularity&lt;/span&gt;
@@ -1133,7 +1294,7 @@ import+0x1000:
     &lt;span class=&quot;nf&quot;&gt;.e_lfanew&lt;/span&gt;   &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;3Ch&lt;/span&gt;
     &lt;span class=&quot;nf&quot;&gt;.data_dir_0&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;88h&lt;/span&gt;
 
-    &lt;span class=&quot;c1&quot;&gt;; Obtain IMAGE_EXPORT_DIRECTORY address in RAX&lt;/span&gt;
+    &lt;span class=&quot;c1&quot;&gt;; Obtain IMAGE_EXPORT_DIRECTORY address in rax&lt;/span&gt;
     &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;.e_lfanew&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;
     &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;eax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;.data_dir_0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;
     &lt;span class=&quot;nf&quot;&gt;add&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rbx&lt;/span&gt;

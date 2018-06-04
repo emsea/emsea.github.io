@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html>
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Saving Space When Saving Space - emsea</title>
+  <meta name="description" content="random blog">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="/2018/06/03/smaller-bss/">
+  <link rel="alternate" type="application/rss+xml" title="emsea" href="/feed.xml">
+</head>
+
+  <body>
+    <div class="page-content">
+      <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+  <header class="post-header">
+    <a href="/">Home</a>
+    <br><br>
+    <h1 class="post-title" itemprop="name headline">Saving Space When Saving Space</h1>
+    <p class="post-meta">
+      <time datetime="2018-06-03T00:00:00-07:00" itemprop="datePublished">Jun 03, 2018</time>
+      
+
+      
+  		
+
+  		
+  		
+
+  		•	<span class="tags" itemprop="tags">
+  				
+  				<a href="/tagged#assembly">#assembly</a>
+  			<a href="/tagged#windows">#Windows</a>
+  			</span>
+
+  	  
+
+    </p>
+  </header>
+  <div class="post-content" itemprop="articleBody">
+    <h2>Problem</h2>
+
+<p><code>.bss</code> (<a href="https://en.wikipedia.org/wiki/.bss">Byte Saving Section</a> 😉) sections are extremely useful for saving on size when dealing with uninitialized data. However in tiny executables where every byte coutes they can take up more space in the binary than you might want.</p>
+
+<p>Consider an entry in your PE&#39;s section table:</p>
+<div class="highlight"><pre><code class="language-text" data-lang="text">&gt; dt -r IMAGE_SECTION_HEADER
+uxtheme!IMAGE_SECTION_HEADER
+   +0x000 Name             : [8] UChar
+   +0x008 Misc             : _IMAGE_SECTION_HEADER::&lt;unnamed-type-Misc&gt;
+      +0x000 PhysicalAddress  : Uint4B
+      +0x000 VirtualSize      : Uint4B
+   +0x00c VirtualAddress   : Uint4B
+   +0x010 SizeOfRawData    : Uint4B
+   +0x014 PointerToRawData : Uint4B
+   +0x018 PointerToRelocations : Uint4B
+   +0x01c PointerToLinenumbers : Uint4B
+   +0x020 NumberOfRelocations : Uint2B
+   +0x022 NumberOfLinenumbers : Uint2B
+   +0x024 Characteristics  : Uint4B
+</code></pre></div>
+<p>That&#39;s 36 bytes of header to describe a section table entry for your uninitialized data. Can we do better if we just want a place to stuff our uninitialized data?</p>
+
+<h2>Solution</h2>
+
+<p>One solution would be to use the top of the stack (TOS) as a place to store your data. Since the Windows loader will allocate pages for the stack of your main thread when your process is initialized, we can tell the loader to allocate a little extra for us to use for general purpose data storage.</p>
+
+<p><img src="/img/stack1.png" alt="Target stack layout"></p>
+
+<p>To do this you have to take into consideration how Windows allocates memory for thread stacks.</p>
+
+<h3>Thread stacks and guard pages</h3>
+
+<p>The default stack size that most compilers and assemblers will specify to be reserved in your PE headers is going to be 1 MB. However the entire 1 MB of stack space isn&#39;t going to be usable all at once. The 1 MB portion of your process&#39; address space is <em>reserved</em> meaning that there can be no other allocations that overlap that consecutive region but there is no backing page frame for the region in physical memory. To actually use the pages in that reserved region you have to <em>commit</em> the pages you want to use. This will locate free pages in physical memory to fill into the corresponding page table entries and reserve space in the page file should the pages need to be paged out. By default the first page at the bottom of the stack (BOS) is committed and immediately usable before your entry point is called by the loader.</p>
+
+<p><img src="/img/stack2.png" alt="Reserved stack memory"></p>
+
+<p>How do the number of committed stack pages grow so that we can use the necessary memory as <code>rsp</code> grows in the direction of the TOS? That&#39;s the job of the stack guard page. Guard pages are special pages that will trigger an exception when accessed. You can register handler functions for these exceptions and do processing based on who touched the guarded page. In the case of a stack guard page, Windows will catch this exception, commit the page on demand, and make the subsequent stack page the next guard page. This allows the OS to not use physical memory for stacks unless absolutely needed. Why would this be needed? Imagine a process which has hundreds or even thousands of threads which all have stacks that are multiple megabytes. This can get expensive very quickly and committing on demand can help in saving physical memory. Once a page has been committed and the stack shrinks above it, it will not be uncomitted.</p>
+
+<p>Implementing a guard page feature in an OS is fairly straightforward as all pages in the guard region need to be set as invalid in the page tables. On access, the kernel page fault handler can look in either the page tables or a data structure describing regions of the virtual address space to see if the page is really invalid and triggering an application exception, or if a callback needs to be fired off.</p>
+
+<p>An interesting caveat of having stack guard pages arises when one wants to allocate a buffer on the stack greater than the guard page region:</p>
+
+<p><img src="/img/stack3.png" alt="Stack guard page"></p>
+
+<p>As you can see, this would skip the guard page if the required stack region hasn&#39;t been committed before. For this reason, MSVC will implicitly call <a href="https://msdn.microsoft.com/en-us/library/ms648426(v=vs.85).aspx"><code>_chkstk</code></a> for large stack allocations behind the scenes to <em>probe</em> the stack and touch as many guard pages as necessary to make sure there is enough committed memory for the buffer.</p>
+
+<p>All this to say, if we tried to blindly use the extra stack memory at the TOS we requested it wouldn&#39;t be committed and segfault our process. Now that we understand the difference between memory being reserved and committed, this is a non-issue as we are able to specify to the loader how much of our stack we want to commit before our entry point is called.</p>
+
+<h3>Updating PE header stack sizes</h3>
+
+<p>We want to change the amount of memory that is both reserved and committed for our stack in our binary&#39;s PE headers. To do this we need to alter the two fields in <code>IMAGE_OPTIONAL_HEADER</code> shown below:</p>
+<div class="highlight"><pre><code class="language-text" data-lang="text">&gt; dt IMAGE_OPTIONAL_HEADER 
+uxtheme!IMAGE_OPTIONAL_HEADER
+...
+   +0x048 SizeOfStackReserve : Uint8B
+   +0x050 SizeOfStackCommit : Uint8B
+...
+</code></pre></div>
+<p>If you are trying to squeeze every last byte out of your files you are probably building your PE headers manually. Take note of the <code>SizeOfStackReserve</code> and <code>SizeOfStackCommit</code> fields are assigned to the same value:</p>
+<div class="highlight"><pre><code class="language-nasm" data-lang="nasm"><span class="c1">; Commit 2 MB of virtual address space for the stack instead of the</span>
+<span class="c1">; normal 1 MB default. We&#39;ll use the upper meg for data storage</span>
+<span class="no">STACK_COMMIT</span><span class="kd"> equ</span> <span class="mh">0x200000</span>
+<span class="c1">; ...</span>
+<span class="nl">IMAGE_OPTIONAL_HEADER:</span>
+    <span class="nf">IMAGE_NT_OPTIONAL_HDR64_MAGIC</span> <span class="err">=</span> <span class="mh">20Bh</span>
+    <span class="nf">IMAGE_SUBSYSTEM_WINDOWS_GUI</span>   <span class="err">=</span> <span class="mi">2</span> 
+
+    <span class="nf">.Magic</span>                      <span class="nv">dw</span> <span class="nv">IMAGE_NT_OPTIONAL_HDR64_MAGIC</span>
+    <span class="nf">.MajorLinkerVersion</span>         <span class="nv">db</span> <span class="mi">0</span>
+    <span class="nf">.MinorLinkerVersion</span>         <span class="nv">db</span> <span class="mi">0</span>
+    <span class="nf">.SizeOfCode</span>                 <span class="nv">dd</span> <span class="mi">0</span>
+    <span class="nf">.SizeOfInitializedData</span>      <span class="nv">dd</span> <span class="mh">0C0h</span>
+    <span class="nf">.SizeOfUninitializedData</span>    <span class="nv">dd</span> <span class="mi">0</span>
+    <span class="nf">.AddressOfEntryPoint</span>        <span class="nv">dd</span> <span class="nv">begin</span>
+    <span class="nf">.BaseOfCode</span>                 <span class="nv">dd</span> <span class="nv">IMAGE_NT_HEADERS</span>
+    <span class="nf">.ImageBase</span>                  <span class="nv">dq</span> <span class="mh">140000000h</span>
+    <span class="nf">.SectionAlignment</span>           <span class="nv">dd</span> <span class="mh">10h</span>
+    <span class="nf">.FileAlignment</span>              <span class="nv">dd</span> <span class="mh">10h</span>
+    <span class="nf">.MajorOperatingSystemVer</span>    <span class="nv">dw</span> <span class="mi">5</span>
+    <span class="nf">.MinorOperatingSystemVer</span>    <span class="nv">dw</span> <span class="mi">2</span>
+    <span class="nf">.MajorImageVersion</span>          <span class="nv">dw</span> <span class="mi">0</span>
+    <span class="nf">.MinorImageVersion</span>          <span class="nv">dw</span> <span class="mi">0</span>
+    <span class="nf">.MajorSubsystemVersion</span>      <span class="nv">dw</span> <span class="mi">5</span>
+    <span class="nf">.MinorSubsystemVersion</span>      <span class="nv">dw</span> <span class="mi">2</span>
+    <span class="nf">.Win32VersionValue</span>          <span class="nv">dd</span> <span class="mi">0</span>
+    <span class="nf">.SizeOfImage</span>                <span class="nv">dd</span> <span class="nv">end_file</span>
+    <span class="nf">.SizeOfHeaders</span>              <span class="nv">dd</span> <span class="nv">begin</span>
+    <span class="nf">.CheckSum</span>                   <span class="nv">dd</span> <span class="mi">0</span>
+    <span class="nf">.Subsystem</span>                  <span class="nv">dw</span> <span class="nv">IMAGE_SUBSYSTEM_WINDOWS_GUI</span>
+    <span class="nf">.DllCharacteristics</span>         <span class="nv">dw</span> <span class="mi">0</span>
+    <span class="nf">.SizeOfStackReserve</span>         <span class="nv">dq</span> <span class="nv">STACK_COMMIT</span>     <span class="c1">; ATTENTION</span>
+    <span class="nf">.SizeOfStackCommit</span>          <span class="nv">dq</span> <span class="nv">STACK_COMMIT</span>     <span class="c1">; ATTENTION</span>
+    <span class="nf">.SizeOfHeapReserve</span>          <span class="nv">dq</span> <span class="mh">100000h</span>
+    <span class="nf">.SizeOfHeapCommit</span>           <span class="nv">dq</span> <span class="mh">1000h</span>
+    <span class="nf">.LoaderFlags</span>                <span class="nv">dd</span> <span class="mi">0</span>
+    <span class="nf">.NumberOfRvaAndSizes</span>        <span class="nv">dd</span> <span class="mi">0</span>
+<span class="c1">; ...</span>
+</code></pre></div>
+<p>Note that the above header definition can be made even smaller with various methods that will be discussed in a later article. If you aren&#39;t building your headers manually or are using something like a packer or <a href="http://www.crinkler.net/">compressing linker</a> then you can use the trusty <a href="https://msdn.microsoft.com/en-us/library/35yc2tc3.aspx"><code>editbin</code> to change <code>SizeOfStackReserve</code> and <code>SizeOfStackCommit</code></a>:</p>
+
+<p>This will make our stack look like the following:</p>
+
+<p><img src="/img/stack4.png" alt="Fully committed stack"></p>
+
+<p>Additionally, the stack is larger than before and we can start storing data in the newly committed upper area. If there is concern of the stack growing into our uninitialized data block we can always bump up the reserved/committed stack size though deep stacks can be indicators of poor program design.</p>
+
+<h3>Locating the TOS</h3>
+
+<p>Now that our stack is correctly initialized at load time it&#39;s not difficult to locate the TOS to start placing our data in the newly committed space:</p>
+<div class="highlight"><pre><code class="language-nasm" data-lang="nasm"><span class="nf">PAGE_SIZE</span> <span class="err">=</span> <span class="mh">1000h</span>
+
+<span class="c1">; We first want to copy the current stack pointer into rax so that we can </span>
+<span class="c1">; change it</span>
+<span class="nf">mov</span> <span class="nb">rax</span><span class="p">,</span> <span class="nb">rsp</span>
+
+<span class="c1">; We then want to align to the nearest page boundary. This is normally</span>
+<span class="c1">; done like: (rax &amp; ~(PAGE_SIZE - 1)). Because pages are normally 4 KB in</span>
+<span class="c1">; size their hex representation is 1000h. To align to 4 KB boundaries we</span>
+<span class="c1">; have to clear the bottom 3 nybbles which is 4*3 = 12 least significant</span>
+<span class="c1">; bits to zero.</span>
+<span class="nf">and</span> <span class="nb">rax</span><span class="p">,</span> <span class="nv">not</span> <span class="p">(</span><span class="nv">PAGE_SIZE</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+
+<span class="c1">; Now we have the base address of the last page in our committed stack</span>
+<span class="c1">; region in our process address space. We want to get to the start of </span>
+<span class="c1">; our committed region which we know is of STACK_COMMIT size. All we </span>
+<span class="c1">; have to do then is move rax STACK_COMMIT right? No, since we&#39;re not</span>
+<span class="c1">; at the very end of the region and at the base of the last page, we have</span>
+<span class="c1">; to roll back (STACK_COMMIT - PAGE_SIZE) to not overshoot our destination :)</span>
+<span class="nf">sub</span> <span class="nb">rax</span><span class="p">,</span> <span class="nv">STACK_COMMIT</span> <span class="o">-</span> <span class="nv">PAGE_SIZE</span>
+</code></pre></div>
+<p>And there we have it, the TOS is now going to be in <code>rax</code>. We need to first align to the nearest page as we aren&#39;t sure exactly where in the BOS page we are after being called by the loader as part of process initialization on Windows runs in user mode on the main thread. We can now store as much data as we feel comfortable in at the top of the stack.</p>
+
+<h2>Conclusion</h2>
+
+<p>That&#39;s it! 15 bytes of machine code to get the TOS in <code>rax</code>. From here in fasm if you want to have multiple uninitialized values you can create a struct using the <a href="https://flatassembler.net/docs.php?article=win32">windows includes</a> <code>struct</code> macro:</p>
+<div class="highlight"><pre><code class="language-nasm" data-lang="nasm"><span class="k">struc</span><span class="nv">t</span> <span class="nv">BSS</span>
+    <span class="nf">Var1</span> <span class="nv">dd</span> <span class="nv">?</span>
+    <span class="nf">Var2</span> <span class="nv">dw</span> <span class="nv">?</span>
+    <span class="nf">Var3</span> <span class="nv">dw</span> <span class="nv">?</span>
+<span class="nf">ends</span>
+
+<span class="c1">; ...</span>
+
+<span class="c1">; rax = base of uninitialize data area</span>
+<span class="nf">mov</span> <span class="p">[</span><span class="nb">rax</span> <span class="o">+</span> <span class="nv">BSS.Var1</span><span class="p">],</span> <span class="mi">123</span>
+</code></pre></div>
+<p>If you have a method to get the TOS in fewer bytes please contact me!</p>
+
+  </div>  
+</article>
+
+      <div class="copyright">
+        <p>&copy; 2018 <a href="" title="random blog"><strong>emsea</strong></a></p>
+      </div>
+    </div>
+  </body>
+</html>

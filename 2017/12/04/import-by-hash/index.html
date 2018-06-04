@@ -874,7 +874,7 @@ import+0x1000:
   <span class="nl">find_kernel32:</span>
     <span class="nf">.alloc_granularity</span> <span class="err">=</span> <span class="mh">10000h</span>
 
-    <span class="c1">; Obtain base of kernel32.dll in RBX</span>
+    <span class="c1">; Obtain base of kernel32.dll in rbx</span>
     <span class="nf">mov</span> <span class="nb">rbx</span><span class="p">,</span> <span class="p">[</span><span class="nb">rsp</span><span class="p">]</span>  <span class="c1">; return address to kernel32 loader function</span>
     <span class="nf">xor</span> <span class="nb">bx</span><span class="p">,</span> <span class="nb">bx</span>      <span class="c1">; align address to 64k boundaries (allocation granularity)</span>
     <span class="nf">sub</span> <span class="nb">rbx</span><span class="p">,</span> <span class="nv">.alloc_granularity</span>
@@ -886,7 +886,7 @@ import+0x1000:
     <span class="nf">.e_lfanew</span>   <span class="err">=</span> <span class="mh">3Ch</span>
     <span class="nf">.data_dir_0</span> <span class="err">=</span> <span class="mh">88h</span>
 
-    <span class="c1">; Obtain IMAGE_EXPORT_DIRECTORY address in RAX</span>
+    <span class="c1">; Obtain IMAGE_EXPORT_DIRECTORY address in rax</span>
     <span class="nf">mov</span> <span class="nb">eax</span><span class="p">,</span> <span class="p">[</span><span class="nb">rbx</span> <span class="o">+</span> <span class="nv">.e_lfanew</span><span class="p">]</span>
     <span class="nf">mov</span> <span class="nb">eax</span><span class="p">,</span> <span class="p">[</span><span class="nb">rbx</span> <span class="o">+</span> <span class="nb">rax</span> <span class="o">+</span> <span class="nv">.data_dir_0</span><span class="p">]</span>
     <span class="nf">add</span> <span class="nb">rax</span><span class="p">,</span> <span class="nb">rbx</span>
