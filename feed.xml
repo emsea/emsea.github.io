@@ -5,8 +5,8 @@
     <description>random blog</description>
     <link>/</link>
     <atom:link href="/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Mon, 04 Jun 2018 01:46:07 -0700</pubDate>
-    <lastBuildDate>Mon, 04 Jun 2018 01:46:07 -0700</lastBuildDate>
+    <pubDate>Mon, 04 Jun 2018 02:00:27 -0700</pubDate>
+    <lastBuildDate>Mon, 04 Jun 2018 02:00:27 -0700</lastBuildDate>
     <generator>Jekyll v3.6.2</generator>
     
       <item>
@@ -35,7 +35,7 @@ uxtheme!IMAGE_SECTION_HEADER
 
 &lt;h2&gt;Solution&lt;/h2&gt;
 
-&lt;p&gt;One solution would be to use the top of the stack (TOS) as a place to store your data. Since the Windows loader will allocate pages for the stack of your main thread when your process is initialized, we can tell the loader to allocate a little extra for us to use for general purpose data storage.&lt;/p&gt;
+&lt;p&gt;One solution would be to use the top of the stack (upper limit) as a place to store your data. Since the Windows loader will allocate pages for the stack of your main thread when your process is initialized, we can tell the loader to allocate a little extra for us to use for general purpose data storage.&lt;/p&gt;
 
 &lt;p&gt;&lt;img src=&quot;/img/stack1.png&quot; alt=&quot;Target stack layout&quot;&gt;&lt;/p&gt;
 
@@ -47,7 +47,7 @@ uxtheme!IMAGE_SECTION_HEADER
 
 &lt;p&gt;&lt;img src=&quot;/img/stack2.png&quot; alt=&quot;Reserved stack memory&quot;&gt;&lt;/p&gt;
 
-&lt;p&gt;How do the number of committed stack pages grow so that we can use the necessary memory as &lt;code&gt;rsp&lt;/code&gt; grows in the direction of the TOS? That&amp;#39;s the job of the stack guard page. Guard pages are special pages that will trigger an exception when accessed. You can register handler functions for these exceptions and do processing based on who touched the guarded page. In the case of a stack guard page, Windows will catch this exception, commit the page on demand, and make the subsequent stack page the next guard page. This allows the OS to not use physical memory for stacks unless absolutely needed. Why would this be needed? Imagine a process which has hundreds or even thousands of threads which all have stacks that are multiple megabytes. This can get expensive very quickly and committing on demand can help in saving physical memory. Once a page has been committed and the stack shrinks above it, it will not be uncomitted.&lt;/p&gt;
+&lt;p&gt;How do the number of committed stack pages grow so that we can use the necessary memory as &lt;code&gt;rsp&lt;/code&gt; grows in the direction of the upper limit? That&amp;#39;s the job of the stack guard page. Guard pages are special pages that will trigger an exception when accessed. You can register handler functions for these exceptions and do processing based on who touched the guarded page. In the case of a stack guard page, Windows will catch this exception, commit the page on demand, and make the subsequent stack page the next guard page. This allows the OS to not use physical memory for stacks unless absolutely needed. Why would this be needed? Imagine a process which has hundreds or even thousands of threads which all have stacks that are multiple megabytes. This can get expensive very quickly and committing on demand can help in saving physical memory. Once a page has been committed and the stack shrinks above it, it will not be uncomitted.&lt;/p&gt;
 
 &lt;p&gt;Implementing a guard page feature in an OS is fairly straightforward as all pages in the guard region need to be set as invalid in the page tables. On access, the kernel page fault handler can look in either the page tables or a data structure describing regions of the virtual address space to see if the page is really invalid and triggering an application exception, or if a callback needs to be fired off.&lt;/p&gt;
 
@@ -57,7 +57,7 @@ uxtheme!IMAGE_SECTION_HEADER
 
 &lt;p&gt;As you can see, this would skip the guard page if the required stack region hasn&amp;#39;t been committed before. For this reason, MSVC will implicitly call &lt;a href=&quot;https://msdn.microsoft.com/en-us/library/ms648426(v=vs.85).aspx&quot;&gt;&lt;code&gt;_chkstk&lt;/code&gt;&lt;/a&gt; for large stack allocations behind the scenes to &lt;em&gt;probe&lt;/em&gt; the stack and touch as many guard pages as necessary to make sure there is enough committed memory for the buffer.&lt;/p&gt;
 
-&lt;p&gt;All this to say, if we tried to blindly use the extra stack memory at the TOS we requested it wouldn&amp;#39;t be committed and segfault our process. Now that we understand the difference between memory being reserved and committed, this is a non-issue as we are able to specify to the loader how much of our stack we want to commit before our entry point is called.&lt;/p&gt;
+&lt;p&gt;All this to say, if we tried to blindly use the extra stack memory at the upper limit we requested it wouldn&amp;#39;t be committed and segfault our process. Now that we understand the difference between memory being reserved and committed, this is a non-issue as we are able to specify to the loader how much of our stack we want to commit before our entry point is called.&lt;/p&gt;
 
 &lt;h3&gt;Updating PE header stack sizes&lt;/h3&gt;
 
@@ -117,9 +117,9 @@ uxtheme!IMAGE_OPTIONAL_HEADER
 
 &lt;p&gt;Additionally, the stack is larger than before and we can start storing data in the newly committed upper area. If there is concern of the stack growing into our uninitialized data block we can always bump up the reserved/committed stack size though deep stacks can be indicators of poor program design.&lt;/p&gt;
 
-&lt;h3&gt;Locating the TOS&lt;/h3&gt;
+&lt;h3&gt;Locating the upper limit&lt;/h3&gt;
 
-&lt;p&gt;Now that our stack is correctly initialized at load time it&amp;#39;s not difficult to locate the TOS to start placing our data in the newly committed space:&lt;/p&gt;
+&lt;p&gt;Now that our stack is correctly initialized at load time it&amp;#39;s not difficult to locate the upper limit to start placing our data in the newly committed space:&lt;/p&gt;
 &lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-nasm&quot; data-lang=&quot;nasm&quot;&gt;&lt;span class=&quot;nf&quot;&gt;PAGE_SIZE&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;1000h&lt;/span&gt;
 
 &lt;span class=&quot;c1&quot;&gt;; We first want to copy the current stack pointer into rax so that we can &lt;/span&gt;
@@ -141,11 +141,11 @@ uxtheme!IMAGE_OPTIONAL_HEADER
 &lt;span class=&quot;c1&quot;&gt;; to roll rax back (STACK_COMMIT - PAGE_SIZE) to not overshoot our destination :)&lt;/span&gt;
 &lt;span class=&quot;nf&quot;&gt;sub&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;STACK_COMMIT&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;PAGE_SIZE&lt;/span&gt;
 &lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
-&lt;p&gt;And there we have it, the TOS is now going to be in &lt;code&gt;rax&lt;/code&gt;. We need to first align to the nearest page as we aren&amp;#39;t sure exactly where in the BOS page we are after being called by the loader as part of process initialization on Windows runs in user mode on the main thread. We can now store as much data as we feel comfortable at the top of the stack.&lt;/p&gt;
+&lt;p&gt;And there we have it, the upper limit is now going to be in &lt;code&gt;rax&lt;/code&gt;. We need to first align to the nearest page as we aren&amp;#39;t sure exactly where in the BOS page we are after being called by the loader as part of process initialization on Windows runs in user mode on the main thread. We can now store as much data as we feel comfortable at the top of the stack.&lt;/p&gt;
 
 &lt;h2&gt;Conclusion&lt;/h2&gt;
 
-&lt;p&gt;That&amp;#39;s it! 15 bytes of machine code to get the TOS in &lt;code&gt;rax&lt;/code&gt;. You could have allocated from the heap to do something similar but it would have ended up costing more bytes depending on your use case. From here in fasm if you want to have multiple uninitialized values you can create a struct using the &lt;a href=&quot;https://flatassembler.net/docs.php?article=win32&quot;&gt;windows includes&lt;/a&gt; &lt;code&gt;struct&lt;/code&gt; macro:&lt;/p&gt;
+&lt;p&gt;That&amp;#39;s it! 15 bytes of machine code to get the upper limit in &lt;code&gt;rax&lt;/code&gt;. You could have allocated from the heap to do something similar but it would have ended up costing more bytes depending on your use case. From here in fasm if you want to have multiple uninitialized values you can create a struct using the &lt;a href=&quot;https://flatassembler.net/docs.php?article=win32&quot;&gt;windows includes&lt;/a&gt; &lt;code&gt;struct&lt;/code&gt; macro:&lt;/p&gt;
 &lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-nasm&quot; data-lang=&quot;nasm&quot;&gt;&lt;span class=&quot;k&quot;&gt;struc&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;t&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;BSS&lt;/span&gt;
     &lt;span class=&quot;nf&quot;&gt;Var1&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;dd&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;?&lt;/span&gt;
     &lt;span class=&quot;nf&quot;&gt;Var2&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;dw&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;?&lt;/span&gt;
@@ -157,7 +157,7 @@ uxtheme!IMAGE_OPTIONAL_HEADER
 &lt;span class=&quot;c1&quot;&gt;; rax = base of uninitialize data area&lt;/span&gt;
 &lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;BSS.Var1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;],&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;123&lt;/span&gt;
 &lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
-&lt;p&gt;If you have a method to get the TOS in fewer bytes please contact me!&lt;/p&gt;
+&lt;p&gt;If you have a method to get the stack limit in fewer bytes please contact me!&lt;/p&gt;
 </description>
         <pubDate>Sun, 03 Jun 2018 00:00:00 -0700</pubDate>
         <link>/2018/06/03/smaller-bss/</link>
