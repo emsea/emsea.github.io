@@ -97,7 +97,7 @@ uxtheme!IMAGE_OPTIONAL_HEADER
    +0x050 SizeOfStackCommit : Uint8B
 ...
 </code></pre></div>
-<p>If you are trying to squeeze every last byte out of your files you are probably building your PE headers manually. Take note of the <code>SizeOfStackReserve</code> and <code>SizeOfStackCommit</code> fields are assigned to the same value:</p>
+<p>If you are trying to squeeze every last byte out of your files you are probably building your PE headers manually. Take note of how the <code>SizeOfStackReserve</code> and <code>SizeOfStackCommit</code> fields are assigned to the same value:</p>
 <div class="highlight"><pre><code class="language-nasm" data-lang="nasm"><span class="c1">; Commit 2 MB of virtual address space for the stack instead of the</span>
 <span class="c1">; normal 1 MB default. We&#39;ll use the upper meg for data storage</span>
 <span class="no">STACK_COMMIT</span><span class="kd"> equ</span> <span class="mh">0x200000</span>
@@ -164,12 +164,12 @@ uxtheme!IMAGE_OPTIONAL_HEADER
 <span class="c1">; Now we have the base address of the last page in our committed stack</span>
 <span class="c1">; region in our process address space. We want to get to the start of </span>
 <span class="c1">; our committed region which we know is of STACK_COMMIT size. All we </span>
-<span class="c1">; have to do then is move rax STACK_COMMIT right? No, since we&#39;re not</span>
+<span class="c1">; have to do then is (rax - STACK_COMMIT) right? No, since we&#39;re not</span>
 <span class="c1">; at the very end of the region and at the base of the last page, we have</span>
-<span class="c1">; to roll back (STACK_COMMIT - PAGE_SIZE) to not overshoot our destination :)</span>
+<span class="c1">; to roll rax back (STACK_COMMIT - PAGE_SIZE) to not overshoot our destination :)</span>
 <span class="nf">sub</span> <span class="nb">rax</span><span class="p">,</span> <span class="nv">STACK_COMMIT</span> <span class="o">-</span> <span class="nv">PAGE_SIZE</span>
 </code></pre></div>
-<p>And there we have it, the TOS is now going to be in <code>rax</code>. We need to first align to the nearest page as we aren&#39;t sure exactly where in the BOS page we are after being called by the loader as part of process initialization on Windows runs in user mode on the main thread. We can now store as much data as we feel comfortable in at the top of the stack.</p>
+<p>And there we have it, the TOS is now going to be in <code>rax</code>. We need to first align to the nearest page as we aren&#39;t sure exactly where in the BOS page we are after being called by the loader as part of process initialization on Windows runs in user mode on the main thread. We can now store as much data as we feel comfortable at the top of the stack.</p>
 
 <h2>Conclusion</h2>
 

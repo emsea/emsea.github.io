@@ -5,8 +5,8 @@
     <description>random blog</description>
     <link>/</link>
     <atom:link href="/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Sun, 03 Jun 2018 22:53:05 -0700</pubDate>
-    <lastBuildDate>Sun, 03 Jun 2018 22:53:05 -0700</lastBuildDate>
+    <pubDate>Mon, 04 Jun 2018 01:46:07 -0700</pubDate>
+    <lastBuildDate>Mon, 04 Jun 2018 01:46:07 -0700</lastBuildDate>
     <generator>Jekyll v3.6.2</generator>
     
       <item>
@@ -69,7 +69,7 @@ uxtheme!IMAGE_OPTIONAL_HEADER
    +0x050 SizeOfStackCommit : Uint8B
 ...
 &lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
-&lt;p&gt;If you are trying to squeeze every last byte out of your files you are probably building your PE headers manually. Take note of the &lt;code&gt;SizeOfStackReserve&lt;/code&gt; and &lt;code&gt;SizeOfStackCommit&lt;/code&gt; fields are assigned to the same value:&lt;/p&gt;
+&lt;p&gt;If you are trying to squeeze every last byte out of your files you are probably building your PE headers manually. Take note of how the &lt;code&gt;SizeOfStackReserve&lt;/code&gt; and &lt;code&gt;SizeOfStackCommit&lt;/code&gt; fields are assigned to the same value:&lt;/p&gt;
 &lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-nasm&quot; data-lang=&quot;nasm&quot;&gt;&lt;span class=&quot;c1&quot;&gt;; Commit 2 MB of virtual address space for the stack instead of the&lt;/span&gt;
 &lt;span class=&quot;c1&quot;&gt;; normal 1 MB default. We&amp;#39;ll use the upper meg for data storage&lt;/span&gt;
 &lt;span class=&quot;no&quot;&gt;STACK_COMMIT&lt;/span&gt;&lt;span class=&quot;kd&quot;&gt; equ&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;0x200000&lt;/span&gt;
@@ -136,12 +136,12 @@ uxtheme!IMAGE_OPTIONAL_HEADER
 &lt;span class=&quot;c1&quot;&gt;; Now we have the base address of the last page in our committed stack&lt;/span&gt;
 &lt;span class=&quot;c1&quot;&gt;; region in our process address space. We want to get to the start of &lt;/span&gt;
 &lt;span class=&quot;c1&quot;&gt;; our committed region which we know is of STACK_COMMIT size. All we &lt;/span&gt;
-&lt;span class=&quot;c1&quot;&gt;; have to do then is move rax STACK_COMMIT right? No, since we&amp;#39;re not&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; have to do then is (rax - STACK_COMMIT) right? No, since we&amp;#39;re not&lt;/span&gt;
 &lt;span class=&quot;c1&quot;&gt;; at the very end of the region and at the base of the last page, we have&lt;/span&gt;
-&lt;span class=&quot;c1&quot;&gt;; to roll back (STACK_COMMIT - PAGE_SIZE) to not overshoot our destination :)&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;; to roll rax back (STACK_COMMIT - PAGE_SIZE) to not overshoot our destination :)&lt;/span&gt;
 &lt;span class=&quot;nf&quot;&gt;sub&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;STACK_COMMIT&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;PAGE_SIZE&lt;/span&gt;
 &lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
-&lt;p&gt;And there we have it, the TOS is now going to be in &lt;code&gt;rax&lt;/code&gt;. We need to first align to the nearest page as we aren&amp;#39;t sure exactly where in the BOS page we are after being called by the loader as part of process initialization on Windows runs in user mode on the main thread. We can now store as much data as we feel comfortable in at the top of the stack.&lt;/p&gt;
+&lt;p&gt;And there we have it, the TOS is now going to be in &lt;code&gt;rax&lt;/code&gt;. We need to first align to the nearest page as we aren&amp;#39;t sure exactly where in the BOS page we are after being called by the loader as part of process initialization on Windows runs in user mode on the main thread. We can now store as much data as we feel comfortable at the top of the stack.&lt;/p&gt;
 
 &lt;h2&gt;Conclusion&lt;/h2&gt;
 
