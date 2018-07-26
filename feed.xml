@@ -5,8 +5,8 @@
     <description>random blog</description>
     <link>/</link>
     <atom:link href="/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Wed, 25 Jul 2018 20:50:25 -0700</pubDate>
-    <lastBuildDate>Wed, 25 Jul 2018 20:50:25 -0700</lastBuildDate>
+    <pubDate>Wed, 25 Jul 2018 20:58:14 -0700</pubDate>
+    <lastBuildDate>Wed, 25 Jul 2018 20:58:14 -0700</lastBuildDate>
     <generator>Jekyll v3.6.2</generator>
     
       <item>
@@ -17,7 +17,7 @@
 
 &lt;h2&gt;Solution&lt;/h2&gt;
 
-&lt;p&gt;When DLL files are distributed with the intent to be linked against their corresponding lib files are made easily available. For these DLLs we can use a listing of exported names obtained from &lt;code&gt;dumpbin.exe&lt;/code&gt; to provide to &lt;code&gt;lib.exe&lt;/code&gt; which will create a lib file for the module in question. Both of these binaries are included with every Visual Studio install.&lt;/p&gt;
+&lt;p&gt;When DLL files are distributed with the intent to be linked against their corresponding lib files are made easily available. Sometimes, you may find DLLs that you want to use but which don&amp;#39;t have an associated lib file. For these DLLs we can use a listing of exported names obtained from &lt;code&gt;dumpbin.exe&lt;/code&gt; to provide to &lt;code&gt;lib.exe&lt;/code&gt; which will create a lib file manually for the module in question. Both of these binaries are included with every Visual Studio install.&lt;/p&gt;
 
 &lt;p&gt;Having done this a few times I decided to write a PowerShell function to automate it:&lt;/p&gt;
 &lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-powershell&quot; data-lang=&quot;powershell&quot;&gt;&lt;span class=&quot;k&quot;&gt;function&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;New-LibFromDll&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;no&quot;&gt;[string]&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$modulePath&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;no&quot;&gt;[string]&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$machine&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;

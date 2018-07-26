@@ -47,7 +47,7 @@
 
 <h2>Solution</h2>
 
-<p>When DLL files are distributed with the intent to be linked against their corresponding lib files are made easily available. For these DLLs we can use a listing of exported names obtained from <code>dumpbin.exe</code> to provide to <code>lib.exe</code> which will create a lib file for the module in question. Both of these binaries are included with every Visual Studio install.</p>
+<p>When DLL files are distributed with the intent to be linked against their corresponding lib files are made easily available. Sometimes, you may find DLLs that you want to use but which don&#39;t have an associated lib file. For these DLLs we can use a listing of exported names obtained from <code>dumpbin.exe</code> to provide to <code>lib.exe</code> which will create a lib file manually for the module in question. Both of these binaries are included with every Visual Studio install.</p>
 
 <p>Having done this a few times I decided to write a PowerShell function to automate it:</p>
 <div class="highlight"><pre><code class="language-powershell" data-lang="powershell"><span class="k">function</span> <span class="nb">New-LibFromDll</span><span class="p">(</span><span class="no">[string]</span><span class="nv">$modulePath</span><span class="p">,</span> <span class="no">[string]</span><span class="nv">$machine</span><span class="p">)</span> <span class="p">{</span>
