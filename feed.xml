@@ -5,9 +5,84 @@
     <description>random blog</description>
     <link>/</link>
     <atom:link href="/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Mon, 04 Jun 2018 11:09:49 -0700</pubDate>
-    <lastBuildDate>Mon, 04 Jun 2018 11:09:49 -0700</lastBuildDate>
+    <pubDate>Wed, 25 Jul 2018 20:50:25 -0700</pubDate>
+    <lastBuildDate>Wed, 25 Jul 2018 20:50:25 -0700</lastBuildDate>
     <generator>Jekyll v3.6.2</generator>
+    
+      <item>
+        <title>Create a Lib from a DLL</title>
+        <description>&lt;h2&gt;Problem&lt;/h2&gt;
+
+&lt;p&gt;If we want to include references to existing DLL files in our binary&amp;#39;s import table in a language like C++ we need to provide a &lt;a href=&quot;https://docs.microsoft.com/en-us/cpp/build/reference/dot-lib-files-as-linker-input&quot;&gt;lib file&lt;/a&gt; to the linker. This saves us the trouble of having to manually locate exported names from modules using either the &lt;code&gt;LoadLibrary&lt;/code&gt; and &lt;code&gt;GetProcAddress&lt;/code&gt; functions or parsing the module&amp;#39;s PE headers by hand. However, for the smallest binaries you may need to import manually instead of relying on the default import table. Unfortunately, sometimes we don&amp;#39;t have that luxury and want to link against non-public modules using a standard import table.&lt;/p&gt;
+
+&lt;h2&gt;Solution&lt;/h2&gt;
+
+&lt;p&gt;When DLL files are distributed with the intent to be linked against their corresponding lib files are made easily available. For these DLLs we can use a listing of exported names obtained from &lt;code&gt;dumpbin.exe&lt;/code&gt; to provide to &lt;code&gt;lib.exe&lt;/code&gt; which will create a lib file for the module in question. Both of these binaries are included with every Visual Studio install.&lt;/p&gt;
+
+&lt;p&gt;Having done this a few times I decided to write a PowerShell function to automate it:&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-powershell&quot; data-lang=&quot;powershell&quot;&gt;&lt;span class=&quot;k&quot;&gt;function&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;New-LibFromDll&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;no&quot;&gt;[string]&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$modulePath&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;no&quot;&gt;[string]&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$machine&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(!(&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;Test-Path&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$modulePath&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;-PathType&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Leaf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;))&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;nb&quot;&gt;Write-Warning&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;$modulePath is an invalid module path&amp;quot;&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;nv&quot;&gt;$exports&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;dumpbin&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;/&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;nologo&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;/&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;exports&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$modulePath&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;|&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Out-String&lt;/span&gt;
+    &lt;span class=&quot;nv&quot;&gt;$tabStart&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$exports&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;IndexOf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&amp;quot;ordinal hint&amp;quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+    &lt;span class=&quot;nv&quot;&gt;$exportsTab&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$exports&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Substring&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$tabStart&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;-split&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;\s+&amp;quot;&lt;/span&gt;
+
+    &lt;span class=&quot;nv&quot;&gt;$numImports&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;0&lt;/span&gt;
+    &lt;span class=&quot;nv&quot;&gt;$def&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;@(&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&amp;quot;EXPORTS&amp;quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$i&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;4&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$exportsTab&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$i&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-ne&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;Summary&amp;quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$i&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;+=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;4&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;nv&quot;&gt;$def&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;+=&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$exportsTab&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$i&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;3&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;
+        &lt;span class=&quot;nv&quot;&gt;$numImports&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;++&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;nv&quot;&gt;$moduleFileInfo&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;New-Object&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;System&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;IO&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;FileInfo&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$modulePath&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+
+    &lt;span class=&quot;nv&quot;&gt;$defFileName&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$moduleFileInfo&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;BaseName&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;.def&amp;quot;&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$def&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;-join&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;&lt;/span&gt;&lt;span class=&quot;se&quot;&gt;`r`n&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&amp;quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;|&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;Out-File&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$defFileName&lt;/span&gt;
+
+    &lt;span class=&quot;nv&quot;&gt;$libMachine&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$machine&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&amp;quot; /machine:$machine&amp;quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&amp;quot;&amp;quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;nv&quot;&gt;$libFileName&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$moduleFileInfo&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;BaseName&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;.lib&amp;quot;&lt;/span&gt;
+    &lt;span class=&quot;n&quot;&gt;iex&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&amp;quot;lib /nologo /def:$defFileName /out:$libFileName&amp;quot;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$libMachine&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+
+    &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;Test-Path&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$libFileName&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;-PathType&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Leaf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;nb&quot;&gt;Write-Host&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;&lt;/span&gt;&lt;span class=&quot;se&quot;&gt;`r`n&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;Created $libFileName importing $numImports exports&lt;/span&gt;&lt;span class=&quot;se&quot;&gt;`r`n&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&amp;quot;&lt;/span&gt;
+        &lt;span class=&quot;nb&quot;&gt;Write-Host&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;#pragma comment(lib, &lt;/span&gt;&lt;span class=&quot;se&quot;&gt;`&amp;quot;&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;$libFileName&lt;/span&gt;&lt;span class=&quot;se&quot;&gt;`&amp;quot;&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;)&amp;quot;&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;nb&quot;&gt;Write-Warning&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;$libFileName was unable to be created&amp;quot;&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;Now let&amp;#39;s use it to create our lib file (you do have dumpbin.exe and lib.exe in your path right?) using a random DLL for demonstration purposes:&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;PS&amp;gt; New-LibFromDll C:\Windows\System32\winsqlite3.dll
+LINK : warning LNK4068: /MACHINE not specified; defaulting to X64
+   Creating library winsqlite3.lib and object winsqlite3.exp
+
+Created winsqlite3.lib importing 243 exports
+
+#pragma comment(lib, &amp;quot;winsqlite3.lib&amp;quot;)
+PS&amp;gt; ls
+Mode                LastWriteTime         Length Name
+----                -------------         ------ ----
+-a----        7/25/2018  8:25 PM          10812 winsqlite3.def
+-a----        7/25/2018  8:25 PM          34057 winsqlite3.exp
+-a----        7/25/2018  8:25 PM          57354 winsqlite3.lib
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;(Note: A lib file already publicly exists for winsqlite3.dll 😊)&lt;/p&gt;
+</description>
+        <pubDate>Fri, 13 Jul 2018 00:00:00 -0700</pubDate>
+        <link>/2018/07/13/lib-from-dll/</link>
+        <guid isPermaLink="true">/2018/07/13/lib-from-dll/</guid>
+        
+        <category>Windows</category>
+        
+        <category>PowerShell</category>
+        
+        <category>C++</category>
+        
+        
+      </item>
     
       <item>
         <title>Saving Space When Saving Space</title>
@@ -40,6 +115,11 @@ uxtheme!IMAGE_SECTION_HEADER
 &lt;p&gt;&lt;img src=&quot;/img/stack1.png&quot; alt=&quot;Target stack layout&quot;&gt;&lt;/p&gt;
 
 &lt;p&gt;To do this you have to take into consideration how Windows allocates memory for thread stacks.&lt;/p&gt;
+
+&lt;p&gt;&lt;strong&gt;Edit:&lt;/strong&gt; A reader has notified me that the current thread&amp;#39;s stack limit is actually in the &lt;a href=&quot;https://en.wikipedia.org/wiki/Win32_Thread_Information_Block&quot;&gt;TIB&lt;/a&gt; (a struct which is the first element of the TEB)! This is convenient and will save a few bytes as it&amp;#39;s a single instruction. To do this one only has to do:&lt;/p&gt;
+&lt;div class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-nasm&quot; data-lang=&quot;nasm&quot;&gt;&lt;span class=&quot;nf&quot;&gt;mov&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;rax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;gs&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:[&lt;/span&gt;&lt;span class=&quot;mh&quot;&gt;0x10&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;Now that that detour is over, let&amp;#39;s get on to my original technique (slightly inferior but with some background) of getting the base of the allocated stack region:&lt;/p&gt;
 
 &lt;h3&gt;Thread stacks and guard pages&lt;/h3&gt;
 

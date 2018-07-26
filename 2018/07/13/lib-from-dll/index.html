@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Create a Lib from a DLL - emsea</title>
+  <meta name="description" content="random blog">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="/2018/07/13/lib-from-dll/">
+  <link rel="alternate" type="application/rss+xml" title="emsea" href="/feed.xml">
+</head>
+
+  <body>
+    <div class="page-content">
+      <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+  <header class="post-header">
+    <a href="/">Home</a>
+    <br><br>
+    <h1 class="post-title" itemprop="name headline">Create a Lib from a DLL</h1>
+    <p class="post-meta">
+      <time datetime="2018-07-13T00:00:00-07:00" itemprop="datePublished">Jul 13, 2018</time>
+      
+
+      
+  		
+
+  		
+  		
+
+  		•	<span class="tags" itemprop="tags">
+  				
+  				
+  				<a href="/tagged#windows">#Windows</a>
+  			<a href="/tagged#powershell">#PowerShell</a>
+  			<a href="/tagged#c">#C++</a>
+  			</span>
+
+  	  
+
+    </p>
+  </header>
+  <div class="post-content" itemprop="articleBody">
+    <h2>Problem</h2>
+
+<p>If we want to include references to existing DLL files in our binary&#39;s import table in a language like C++ we need to provide a <a href="https://docs.microsoft.com/en-us/cpp/build/reference/dot-lib-files-as-linker-input">lib file</a> to the linker. This saves us the trouble of having to manually locate exported names from modules using either the <code>LoadLibrary</code> and <code>GetProcAddress</code> functions or parsing the module&#39;s PE headers by hand. However, for the smallest binaries you may need to import manually instead of relying on the default import table. Unfortunately, sometimes we don&#39;t have that luxury and want to link against non-public modules using a standard import table.</p>
+
+<h2>Solution</h2>
+
+<p>When DLL files are distributed with the intent to be linked against their corresponding lib files are made easily available. For these DLLs we can use a listing of exported names obtained from <code>dumpbin.exe</code> to provide to <code>lib.exe</code> which will create a lib file for the module in question. Both of these binaries are included with every Visual Studio install.</p>
+
+<p>Having done this a few times I decided to write a PowerShell function to automate it:</p>
+<div class="highlight"><pre><code class="language-powershell" data-lang="powershell"><span class="k">function</span> <span class="nb">New-LibFromDll</span><span class="p">(</span><span class="no">[string]</span><span class="nv">$modulePath</span><span class="p">,</span> <span class="no">[string]</span><span class="nv">$machine</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">if</span><span class="p">(!(</span><span class="nb">Test-Path</span> <span class="nv">$modulePath</span> <span class="n">-PathType</span> <span class="n">Leaf</span><span class="p">))</span> <span class="p">{</span>
+        <span class="nb">Write-Warning</span> <span class="s2">&quot;$modulePath is an invalid module path&quot;</span>
+        <span class="k">return</span>
+    <span class="p">}</span>
+
+    <span class="nv">$exports</span> <span class="p">=</span> <span class="p">(</span><span class="n">dumpbin</span> <span class="p">/</span><span class="n">nologo</span> <span class="p">/</span><span class="n">exports</span> <span class="nv">$modulePath</span><span class="p">)</span> <span class="p">|</span> <span class="nb">Out-String</span>
+    <span class="nv">$tabStart</span> <span class="p">=</span> <span class="nv">$exports</span><span class="p">.</span><span class="n">IndexOf</span><span class="p">(</span><span class="s2">&quot;ordinal hint&quot;</span><span class="p">)</span>
+    <span class="nv">$exportsTab</span> <span class="p">=</span> <span class="nv">$exports</span><span class="p">.</span><span class="n">Substring</span><span class="p">(</span><span class="nv">$tabStart</span><span class="p">)</span> <span class="n">-split</span> <span class="s2">&quot;\s+&quot;</span>
+
+    <span class="nv">$numImports</span> <span class="p">=</span> <span class="n">0</span>
+    <span class="nv">$def</span> <span class="p">=</span> <span class="p">@(</span><span class="s2">&quot;EXPORTS&quot;</span><span class="p">)</span>
+    <span class="k">for</span><span class="p">(</span><span class="nv">$i</span> <span class="p">=</span> <span class="n">4</span><span class="p">;</span> <span class="nv">$exportsTab</span><span class="p">[</span><span class="nv">$i</span><span class="p">]</span> <span class="o">-ne</span> <span class="s2">&quot;Summary&quot;</span><span class="p">;</span> <span class="nv">$i</span> <span class="p">+=</span> <span class="n">4</span><span class="p">)</span> <span class="p">{</span>
+        <span class="nv">$def</span> <span class="p">+=</span> <span class="nv">$exportsTab</span><span class="p">[</span><span class="nv">$i</span> <span class="p">+</span> <span class="n">3</span><span class="p">]</span>
+        <span class="nv">$numImports</span><span class="p">++</span>
+    <span class="p">}</span>
+
+    <span class="nv">$moduleFileInfo</span> <span class="p">=</span> <span class="nb">New-Object</span> <span class="n">System</span><span class="p">.</span><span class="n">IO</span><span class="p">.</span><span class="n">FileInfo</span><span class="p">(</span><span class="nv">$modulePath</span><span class="p">)</span>
+
+    <span class="nv">$defFileName</span> <span class="p">=</span> <span class="nv">$moduleFileInfo</span><span class="p">.</span><span class="n">BaseName</span> <span class="p">+</span> <span class="s2">&quot;.def&quot;</span>
+    <span class="p">(</span><span class="nv">$def</span> <span class="n">-join</span> <span class="s2">&quot;</span><span class="se">`r`n</span><span class="s2">&quot;</span><span class="p">)</span> <span class="p">|</span> <span class="nb">Out-File</span> <span class="nv">$defFileName</span>
+
+    <span class="nv">$libMachine</span> <span class="p">=</span> <span class="k">if</span><span class="p">(</span><span class="nv">$machine</span><span class="p">)</span> <span class="p">{</span><span class="s2">&quot; /machine:$machine&quot;</span><span class="p">}</span> <span class="k">else</span> <span class="p">{</span><span class="s2">&quot;&quot;</span><span class="p">}</span>
+    <span class="nv">$libFileName</span> <span class="p">=</span> <span class="nv">$moduleFileInfo</span><span class="p">.</span><span class="n">BaseName</span> <span class="p">+</span> <span class="s2">&quot;.lib&quot;</span>
+    <span class="n">iex</span> <span class="p">(</span><span class="s2">&quot;lib /nologo /def:$defFileName /out:$libFileName&quot;</span> <span class="p">+</span> <span class="nv">$libMachine</span><span class="p">)</span>
+
+    <span class="k">if</span><span class="p">(</span><span class="nb">Test-Path</span> <span class="nv">$libFileName</span> <span class="n">-PathType</span> <span class="n">Leaf</span><span class="p">)</span> <span class="p">{</span>
+        <span class="nb">Write-Host</span> <span class="s2">&quot;</span><span class="se">`r`n</span><span class="s2">Created $libFileName importing $numImports exports</span><span class="se">`r`n</span><span class="s2">&quot;</span>
+        <span class="nb">Write-Host</span> <span class="s2">&quot;#pragma comment(lib, </span><span class="se">`&quot;</span><span class="s2">$libFileName</span><span class="se">`&quot;</span><span class="s2">)&quot;</span>
+    <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+        <span class="nb">Write-Warning</span> <span class="s2">&quot;$libFileName was unable to be created&quot;</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Now let&#39;s use it to create our lib file (you do have dumpbin.exe and lib.exe in your path right?) using a random DLL for demonstration purposes:</p>
+<div class="highlight"><pre><code class="language-text" data-lang="text">PS&gt; New-LibFromDll C:\Windows\System32\winsqlite3.dll
+LINK : warning LNK4068: /MACHINE not specified; defaulting to X64
+   Creating library winsqlite3.lib and object winsqlite3.exp
+
+Created winsqlite3.lib importing 243 exports
+
+#pragma comment(lib, &quot;winsqlite3.lib&quot;)
+PS&gt; ls
+Mode                LastWriteTime         Length Name
+----                -------------         ------ ----
+-a----        7/25/2018  8:25 PM          10812 winsqlite3.def
+-a----        7/25/2018  8:25 PM          34057 winsqlite3.exp
+-a----        7/25/2018  8:25 PM          57354 winsqlite3.lib
+</code></pre></div>
+<p>(Note: A lib file already publicly exists for winsqlite3.dll 😊)</p>
+
+  </div>  
+</article>
+
+      <div class="copyright">
+        <p>&copy; 2018 <a href="" title="random blog"><strong>emsea</strong></a></p>
+      </div>
+    </div>
+  </body>
+</html>

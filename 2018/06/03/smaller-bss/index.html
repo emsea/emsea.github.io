@@ -69,6 +69,11 @@ uxtheme!IMAGE_SECTION_HEADER
 
 <p>To do this you have to take into consideration how Windows allocates memory for thread stacks.</p>
 
+<p><strong>Edit:</strong> A reader has notified me that the current thread&#39;s stack limit is actually in the <a href="https://en.wikipedia.org/wiki/Win32_Thread_Information_Block">TIB</a> (a struct which is the first element of the TEB)! This is convenient and will save a few bytes as it&#39;s a single instruction. To do this one only has to do:</p>
+<div class="highlight"><pre><code class="language-nasm" data-lang="nasm"><span class="nf">mov</span> <span class="nb">rax</span><span class="p">,</span> <span class="nb">gs</span><span class="p">:[</span><span class="mh">0x10</span><span class="p">]</span>
+</code></pre></div>
+<p>Now that that detour is over, let&#39;s get on to my original technique (slightly inferior but with some background) of getting the base of the allocated stack region:</p>
+
 <h3>Thread stacks and guard pages</h3>
 
 <p>The default stack size that most compilers and assemblers will specify to be reserved in your PE headers is going to be 1 MB. However the entire 1 MB of stack space isn&#39;t going to be usable all at once. The 1 MB portion of your process&#39; address space is <em>reserved</em> meaning that there can be no other allocations that overlap that consecutive region but there is no backing page frame for the region in physical memory. To actually use the pages in that reserved region you have to <em>commit</em> the pages you want to use. This will locate free pages in physical memory to fill into the corresponding page table entries and reserve space in the page file should the pages need to be paged out. By default the first page at the bottom of the stack (BOS) is committed and immediately usable before your entry point is called by the loader.</p>
